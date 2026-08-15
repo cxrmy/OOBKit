@@ -1,0 +1,30 @@
+# 编译产物
+*.exe
+*.dll
+*.so
+*.dylib
+oobkit
+bmcatcher
+OOBKit
+
+# Wails 构建产物
+build/
+frontend/wailsjs/
+
+# Go
+vendor/
+*.test
+*.out
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 本地配置（用户数据）
+*.user.config

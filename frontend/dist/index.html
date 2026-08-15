@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OOBKit</title>
+<script src="./vue.global.prod.js"></script>
+<script src="./tailwind.js"></script>
+<style>
+body{font-family:'Inter','Microsoft YaHei',system-ui,sans-serif;background:#0D1117;color:#E6EDF3;margin:0;overflow:hidden;height:100vh}
+#app{display:flex;flex-direction:column;height:100vh}
+.sidebar-btn{transition:all .15s;border-left:3px solid transparent;color:#8B949E}
+.sidebar-btn.active{border-left-color:#58A6FF;background:rgba(88,166,255,.1);color:#58A6FF}
+.sidebar-btn:hover:not(.active){background:rgba(255,255,255,.03);color:#E6EDF3}
+input,select{background:#1C2128;border:1px solid #30363D;color:#E6EDF3;border-radius:6px;padding:6px 10px;font-size:13px;outline:none;width:100%}
+input:focus,select:focus{border-color:#58A6FF;box-shadow:0 0 0 3px rgba(88,166,255,.15)}
+.btn{padding:6px 14px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid #30363D;background:#1C2128;color:#E6EDF3;transition:all .15s;white-space:nowrap}
+.btn:hover{background:#21262D}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-blue{background:#1F6FEB;border-color:#1F6FEB;color:#fff}.btn-blue:hover{background:#388BFD}
+.btn-green{background:#238636;border-color:#238636;color:#fff}.btn-green:hover{background:#2EA043}
+.btn-red{background:#DA3633;border-color:#DA3633;color:#fff}.btn-red:hover{background:#F85149}
+.btn-sm{padding:4px 10px;font-size:12px}
+.status-bar{background:#161B22;border-top:1px solid #30363D;font-size:12px}
+.card{background:#161B22;border:1px solid #30363D;border-radius:10px;padding:12px 16px}
+.card.selected{border-color:#58A6FF!important;background:#1C2128!important}
+.card.bmc{border-left:3px solid #3FB950}
+.card.inspur{border-left:3px solid #58A6FF;background:linear-gradient(135deg,#161B22,rgba(88,166,255,.05))}
+.log-area{background:#0D1117;border:1px solid #30363D;border-radius:6px;font-family:monospace;font-size:13px;color:#8B949E;overflow-y:auto;white-space:pre-wrap}
+[data-wails-drag],.titlebar-drag{-webkit-app-region:drag;--wails-draggable:drag}
+.titlebar-no-drag,[data-wails-no-drag]{-webkit-app-region:no-drag;--wails-draggable:no-drag}
+.win-btn{padding:4px 10px;border:none;background:transparent;color:#8B949E;font-size:14px;cursor:pointer;border-radius:4px;line-height:1;-webkit-app-region:no-drag;--wails-draggable:no-drag}
+.win-btn:hover{background:rgba(255,255,255,.08);color:#E6EDF3}
+.win-btn-close:hover{background:#DA3633;color:#fff}
+.sidebar-btn{-webkit-app-region:no-drag;--wails-draggable:no-drag}
+input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-thumb{background:#30363D;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="app">
+<div class="titlebar-drag flex-shrink-0 flex items-center" style="height:36px;background:#161B22;padding:0 8px" data-wails-drag>
+<span class="text-[11px] text-[#484F58] ml-2">OOBKit</span>
+<span class="flex-1"></span>
+<button class="win-btn" @click="winMin" title="最小化">─</button>
+<button class="win-btn" @click="winMax" title="最大化">☐</button>
+<button class="win-btn win-btn-close" @click="winClose" title="关闭">✕</button>
+</div>
+<div style="display:flex;flex:1;overflow:hidden">
+<nav class="w-[180px] flex-shrink-0 flex flex-col" style="background:#1E1E2E" data-wails-drag>
+<div class="px-4 py-5 border-b border-[#30363D]"><div class="text-lg font-bold text-[#58A6FF] tracking-tight">OOBKit</div><div class="text-[11px] text-[#8B949E]">带外管理工具</div></div>
+<div class="flex-1 flex flex-col gap-1 p-3">
+<button v-for="tab in tabs" :key="tab.id" @click="currentView=tab.id" class="sidebar-btn w-full text-left px-3 py-2.5 text-[13px] rounded-r-lg" :class="{active:currentView===tab.id}"><span class="mr-2">{{tab.icon}}</span>{{tab.label}}</button>
+</div>
+<div class="flex items-center px-4 border-t border-[#30363D] h-9"><div class="text-[11px] text-[#484F58]">v2.0.1 · Go+Wails</div></div>
+</nav>
+<div class="flex-1 flex flex-col overflow-hidden">
+<div v-if="currentView==='probe'" class="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
+<div class="card flex items-center gap-3 flex-shrink-0">
+<label class="text-[11px] text-[#8B949E] whitespace-nowrap">网卡</label>
+<select v-model="selectedIface" class="flex-1 max-w-[300px]"><option value="">选择网卡...</option><option v-for="iface in interfaces" :key="iface.name" :value="iface.name">{{iface.netshName||iface.description||iface.name}}{{iface.hasIp?' · '+iface.ip:' · ⬇'}}</option></select>
+<button class="btn" @click="refreshInterfaces">&#x1F504; 刷新</button>
+<button class="btn btn-sm" @click="setDefaultIface" :disabled="!selectedIface" title="保存为默认网卡">⭐ 默认</button>
+<span class="flex-1"></span>
+<button class="btn btn-green" @click="toggleSniff" :disabled="!selectedIface">{{sniffing?'⏹ 停止':'▶ 监听'}}</button>
+</div>
+<div class="flex items-center gap-3 text-[12px] text-[#8B949E] flex-shrink-0">
+<span>设备: <b class="text-white">{{devices.length}}</b></span>
+<span>BMC: <b style="color:#58A6FF">{{bmcCount}}</b></span>
+<span v-if="scanning||sniffing" style="color:#3FB950">{{sniffing?'监听中':'扫描中'}}</span>
+<span class="flex-1"></span>
+<button class="btn btn-sm" @click="selectAll">全选</button>
+<button class="btn btn-sm" @click="exportCSV" :disabled="!devices.length">CSV</button>
+</div>
+<div class="flex-1 overflow-auto" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;align-content:start">
+<div v-for="(dev,idx) in devices" :key="dev.ip+dev.mac" class="card cursor-pointer" :class="cardClass(idx,dev)" @click="toggleRow(idx,$event)" @dblclick="openBrowser(idx)" style="position:relative">
+<div class="flex justify-between items-start mb-2"><span class="text-[16px] font-bold" style="font-family:monospace;color:#58A6FF">{{dev.ip}}</span><span v-if="dev.isBmc" class="px-2 py-0.5 rounded-full text-[10px] font-bold" :class="dev.vendor.includes('浪潮')||dev.vendor.includes('Inspur')?'inspur-badge':'bmc-badge'">{{dev.vendor.includes('浪潮')||dev.vendor.includes('Inspur')?'浪潮':'BMC'}}</span></div>
+<div class="font-mono text-[11px] text-[#8B949E] mb-1">{{dev.mac}}</div>
+<div class="text-[12px] text-[#8B949E]">{{dev.vendor}}</div>
+<div class="flex gap-1.5 mt-3 card-actions"><button class="btn btn-sm" title="浏览器打开" @click.stop="openBrowser(idx)">🌐</button><button class="btn btn-sm" title="一键配网" @click.stop="selectOnly(idx);autoConfigIP()">🔧</button><button class="btn btn-sm" title="复制IP" @click.stop="copyIP(idx)">📋</button></div>
+</div>
+<div v-if="!devices.length" style="grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;color:#484F58"><div class="text-4xl mb-3 opacity-50">📡</div><div class="text-sm font-semibold text-[#8B949E]">暂无设备</div><div class="text-xs mt-1">选择网卡后点击「监听」开始探测</div></div>
+</div></div>
+<div v-if="currentView==='dhcp'" class="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
+<div class="flex items-center gap-2 flex-shrink-0 text-[13px]">
+<span class="text-[#8B949E]">网卡</span>
+<select v-model="selectedIface" class="max-w-[220px]"><option value="">选择网卡...</option><option v-for="iface in interfaces" :key="iface.name" :value="iface.name">{{iface.netshName||iface.description||iface.name}}</option></select>
+</div>
+<div class="card flex-shrink-0 grid grid-cols-5 gap-3 text-[14px]">
+<div><label class="text-[#8B949E]">起始 IP</label><input v-model="dhcp.startIP"></div>
+<div><label class="text-[#8B949E]">结束 IP</label><input v-model="dhcp.endIP"></div>
+<div><label class="text-[#8B949E]">子网掩码</label><input v-model="dhcp.mask"></div>
+<div><label class="text-[#8B949E]">网关</label><input v-model="dhcp.gateway"></div>
+<div class="flex items-end"><button class="btn btn-sm" @click="setGatewayIP">初始化</button></div>
+</div>
+<div class="flex gap-2 flex-shrink-0">
+<input v-model="dhcp.customIP" placeholder="自定义本机 IP" class="max-w-[180px] text-[14px]">
+<button class="btn btn-blue btn-sm" @click="setCustomIP">更改</button>
+<span class="flex-1"></span>
+<button v-if="!dhcpRunning" class="btn btn-green" @click="startDHCP">启动 DHCP</button>
+<button v-else class="btn btn-red" @click="stopDHCP">停止 DHCP</button>
+</div>
+<div class="flex-1 flex flex-col min-h-0">
+<div class="flex items-center justify-between mb-1"><span class="text-[13px] text-[#8B949E]">租约</span><span class="text-[11px] text-[#484F58]">{{dhcpLeases.length}} 个</span></div>
+<div class="flex-1 flex flex-col gap-2 min-h-0">
+<div v-if="dhcpLeases.length" class="flex-shrink-0 overflow-auto" style="max-height:140px">
+<table class="w-full text-[13px]"><thead class="text-[#8B949E] text-left"><tr><th class="p-1.5">MAC</th><th class="p-1.5">IP</th><th class="p-1.5">过期</th></tr></thead>
+<tbody><tr v-for="l in dhcpLeases" :key="l.mac" class="border-t border-[#30363D]">
+<td class="p-1.5 font-mono text-[#58A6FF]">{{l.mac}}</td>
+<td class="p-1.5 font-mono text-[#3FB950]">{{l.ip}}</td>
+<td class="p-1.5 text-[#484F58] text-[12px]">{{l.expires}}</td>
+</tr></tbody></table>
+</div>
+<div v-else class="text-[#484F58] text-sm flex-shrink-0">尚无租约</div>
+<div class="log-area flex-1 p-3" style="min-height:60px">{{dhcpLog||'活动日志'}}</div>
+</div>
+</div>
+</div>
+<div v-if="currentView==='fru'" class="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
+<div class="card flex-shrink-0 grid grid-cols-4 gap-3 text-[14px]">
+<div><label class="text-[#8B949E]">IPMI IP</label><input v-model="fru.host"></div>
+<div><label class="text-[#8B949E]">用户名</label><input v-model="fru.user"></div>
+<div><label class="text-[#8B949E]">密码</label><input type="password" v-model="fru.pass"></div>
+<div class="flex items-end gap-1"><button class="btn btn-blue btn-sm" @click="exportFRU">导出</button><button class="btn btn-green btn-sm" @click="saveFRUFile" :disabled="!fruHasFields">保存</button><button class="btn btn-sm" @click="importFRU" :disabled="!fruHasFields">导入</button><button class="btn btn-sm" @click="openFRUFile">打开</button></div>
+</div>
+<div v-if="fruHasFields" class="flex-1 overflow-auto">
+<table class="w-full text-[14px]"><thead class="text-[#8B949E] text-left"><tr><th class="p-2">字段</th><th class="p-2">值</th></tr></thead>
+<tbody><template v-for="fd in fruFieldDefs" :key="fd.key">
+<tr v-if="fruFields[fd.key]!==undefined" class="border-t border-[#30363D]">
+<td class="p-2 text-[#8B949E] whitespace-nowrap">{{fd.label}}</td>
+<td class="p-2">
+<input v-if="fd.editable" v-model="fruFields[fd.key]" style="background:#0D1117;min-width:200px;font-family:monospace;font-size:14px" class="!bg-[#0D1117]">
+<span v-else class="text-[#E6EDF3] font-mono text-[14px]">{{fruFields[fd.key]}}</span>
+</td>
+</tr>
+</template></tbody></table>
+</div>
+<div v-else class="flex-1 flex items-center justify-center text-[#484F58] text-sm">输入 IPMI 信息后点击「导出 FRU」</div>
+<div class="flex-shrink-0"><div class="flex items-center gap-2 mb-2"><span class="text-[11px] text-[#8B949E]">快捷IPMI指令</span><button class="btn btn-sm" @click="addIPMIButton">+ 添加</button></div>
+<div class="flex gap-2 flex-wrap"><template v-for="(btn,i) in ipmiButtons" :key="i"><button class="btn btn-sm" @click="runIPMI(btn.command)">{{btn.label}}</button><button class="text-[#F85149] text-[10px] cursor-pointer" @click="removeIPMIButton(i)">x</button></template></div></div>
+<div class="flex-shrink-0" style="position:relative">
+<div @mousedown="startResize" class="resize-handle" style="height:6px;cursor:ns-resize;margin-bottom:2px;border-radius:3px;background:transparent;transition:background .15s" @mouseenter="$event.target.style.background='#30363D'" @mouseleave="$event.target.style.background='transparent'"></div>
+<div class="log-area" :style="{height:logHeight+'px'}" style="resize:none;transition:height .1s ease-out">{{ipmiOutput||'点击快捷命令查看输出'}}</div>
+</div>
+</div>
+<div v-if="currentView==='about'" class="flex-1 flex items-center justify-center p-4 overflow-auto">
+<div class="card w-[420px] text-center">
+<div class="text-5xl mb-3">🔧</div>
+<div class="text-xl font-bold text-[#58A6FF] mb-1">OOBKit</div>
+<div class="text-[13px] text-[#8B949E] mb-4">带外管理工具 v2.0.1</div>
+<div class="text-[13px] text-[#E6EDF3] leading-relaxed mb-5">
+集 BMC IP探测、DHCP 服务器、FRU 读写<br>与 IPMI 快捷命令于一体的带外运维工具箱。
+</div>
+<div class="border-t border-[#30363D] pt-4 mb-4">
+<div class="text-[11px] text-[#8B949E] uppercase tracking-wide mb-2">关注公众号</div>
+<img src="qrcode.jpg" class="w-[160px] h-[160px] mx-auto rounded-lg">
+</div>
+<div class="text-[11px] text-[#484F58] mt-2">扫码关注，获取最新更新与其他实用工具</div>
+<div class="text-[11px] text-[#E6EDF3] mt-3 pt-3 border-t border-[#30363D]">
+By愁绪入梦远<br>基于 Go + Wails · go-ipmi 库
+</div>
+</div>
+</div>
+<div class="status-bar flex items-center px-4 gap-4 h-9"><span>网卡: <b>{{currentIfaceName}}</b></span><span>IP: <b>{{currentIfaceIP}}</b></span><span class="flex-1"></span><button class="btn btn-sm" @click="showLog=true">日志 ({{logLines}})</button></div>
+</div>
+</div>
+<div v-if="showLog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="showLog=false" style="backdrop-filter:blur(4px)">
+<div class="card w-[560px] max-h-[70vh] flex flex-col"><div class="flex items-center gap-2 mb-3"><h3 class="text-sm font-bold flex-1">日志</h3><button class="btn btn-sm" @click="logContent=''">清空</button></div><div class="log-area flex-1 p-3 h-[400px]">{{logContent||'暂无日志'}}</div><button class="btn mt-3" @click="showLog=false">关闭</button></div>
+</div>
+</div>
+<style>.card-actions{opacity:0;transition:opacity .15s}.card:hover .card-actions{opacity:1}
+.inspur-badge{background:rgba(88,166,255,.15);color:#58A6FF;border:1px solid rgba(88,166,255,.3)}.bmc-badge{background:rgba(63,185,80,.15);color:#3FB950;border:1px solid rgba(63,185,80,.3)}
+.resize-handle:hover{background:#30363D!important}.resize-handle:active{background:#58A6FF!important}</style>
+<script>
+const{createApp,ref,reactive,computed,onMounted}=Vue;
+createApp({setup(){
+const tabs=[{id:"probe",label:"BMC 探测器",icon:"📡"},{id:"dhcp",label:"DHCP 服务器",icon:"🏠"},{id:"fru",label:"FRU / IPMI",icon:"🔧"},{id:"about",label:"关于",icon:"ℹ️"}];
+const currentView=ref("probe");
+const interfaces=ref([]),selectedIface=ref(""),devices=ref([]);
+const scanning=ref(false),sniffing=ref(false),statusRunning=ref(false);
+const selectedRows=ref(new Set());
+const showLog=ref(false),logContent=ref(""),logLines=ref(0);
+const backend=window.go&&window.go.main&&window.go.main.App;
+const dhcp=reactive({startIP:"192.168.1.2",endIP:"192.168.1.253",mask:"255.255.255.0",gateway:"192.168.1.1",customIP:""});
+const dhcpRunning=ref(false),dhcpLog=ref(""),dhcpLeases=ref([]);
+let leaseTimer=null;
+const fru=reactive({host:"",user:"admin",pass:""});
+const fruFields=reactive({});
+const fruFieldDefs=[
+{key:"Chassis_Type",label:"c0  Chassis Type",editable:true},
+{key:"Chassis_PartNumber",label:"c1  Chassis Part Number",editable:true},
+{key:"Chassis_SerialNumber",label:"c2  Chassis Serial",editable:true},
+{key:"Board_MfgDate",label:"Board Mfg Date",editable:false},
+{key:"Board_Manufacturer",label:"b0  Board Mfg",editable:true},
+{key:"Board_ProductName",label:"b1  Board Product",editable:true},
+{key:"Board_SerialNumber",label:"b2  Board Serial",editable:true},
+{key:"Board_PartNumber",label:"b3  Board Part Number",editable:true},
+{key:"Product_Manufacturer",label:"p0  Product Manufacturer",editable:true},
+{key:"Product_ProductName",label:"p1  Product Name",editable:true},
+{key:"Product_PartNumber",label:"p2  Product Part Number",editable:true},
+{key:"Product_Version",label:"p3  Product Version",editable:true},
+{key:"Product_SerialNumber",label:"p4  Product Serial",editable:true},
+{key:"Product_AssetTag",label:"p5  Product Asset Tag",editable:true},
+{key:"Product_FRUFileID",label:"p6  Product FRU File ID",editable:true},
+{key:"Product_Extra_0",label:"p7  Product Extra",editable:true},
+{key:"Product_Extra_1",label:"p8  Product Extra",editable:true},
+];
+const ipmiButtons=ref([]);
+const ipmiOutput=ref("");
+const logHeight=ref(120);
+let rszEl=null,rszStartY=0,rszStartH=0;
+function startResize(e){rszEl=e.target.parentElement.querySelector(".log-area");rszStartY=e.clientY;rszStartH=rszEl.offsetHeight;document.addEventListener("mousemove",onResize);document.addEventListener("mouseup",stopResize);e.preventDefault()}
+function onResize(e){if(!rszEl)return;var h=rszStartH+rszStartY-e.clientY;logHeight.value=Math.max(40,Math.min(h,600));rszEl.style.height=logHeight.value+"px"}
+function stopResize(){document.removeEventListener("mousemove",onResize);document.removeEventListener("mouseup",stopResize);rszEl=null}
+function winMin(){window.runtime&&window.runtime.WindowMinimise()}
+function winMax(){window.runtime&&window.runtime.WindowToggleMaximise()}
+function winClose(){window.runtime&&window.runtime.Quit()}
+const bmcCount=computed(function(){return devices.value.filter(function(d){return d.isBmc}).length});
+const fruHasFields=computed(function(){return fruFieldDefs.some(function(fd){return fruFields[fd.key]!==undefined})});
+const currentIfaceName=computed(function(){var f=interfaces.value.find(function(i){return i.name===selectedIface.value});return f?f.netshName||f.description||f.name:"未选择"});
+const currentIfaceIP=computed(function(){var f=interfaces.value.find(function(i){return i.name===selectedIface.value});return f?f.ip||"-":"-"});
+function cardClass(idx,dev){var c=[];if(selectedRows.value.has(idx))c.push("selected");if(dev.isBmc){if(dev.vendor.includes("浪潮")||dev.vendor.includes("Inspur"))c.push("inspur");else c.push("bmc")}return c}
+async function call(m){var a=[];for(var i=1;i<arguments.length;i++)a.push(arguments[i]);if(!backend)return null;try{return await backend[m].apply(backend,a)}catch(e){console.error(e);return null}}
+async function refreshInterfaces(){var r=await call("GetInterfaces");if(r){interfaces.value=r;var cfg=await call("GetConfig");if(cfg&&cfg.DefaultIface){var found=r.find(function(i){return i.name===cfg.DefaultIface||i.netshName===cfg.DefaultIface});if(found)selectedIface.value=found.name}if(!selectedIface.value&&r.length)selectedIface.value=r[0].name}}
+async function setDefaultIface(){if(!selectedIface.value)return;await call("SetDefaultIface",selectedIface.value);alert("默认网卡已保存")}
+async function toggleSniff(){if(sniffing.value){await call("StopAll");sniffing.value=statusRunning.value=false;return}if(!selectedIface.value)return;sniffing.value=statusRunning.value=true;alert("监听已启动！请拔插一次网线或将BMC接入网络。");await call("StartSniff",selectedIface.value)}
+async function stopAll(){await call("StopAll");scanning.value=sniffing.value=statusRunning.value=false}
+async function autoConfigIP(){if(!selectedRows.value.size||!selectedIface.value)return;var d=devices.value[Array.from(selectedRows.value)[0]];var p=d.ip.split(".");var def=p[0]+"."+p[1]+"."+p[2]+".1";var ip=prompt("配置本机IP:",def);if(!ip)return;await call("SetStaticIP",selectedIface.value,ip,"255.255.255.0","");await refreshInterfaces()}
+function toggleRow(i,e){var s=new Set(selectedRows.value);if(e.ctrlKey||e.metaKey)s.has(i)?s.delete(i):s.add(i);else{s.clear();s.add(i)}selectedRows.value=s}
+function selectOnly(i){selectedRows.value=new Set([i])}
+function selectAll(){selectedRows.value=new Set(devices.value.map(function(_,i){return i}))}
+function openBrowser(i){var idx=i;if(idx===undefined&&selectedRows.value.size)idx=Array.from(selectedRows.value)[0];if(idx!==undefined)window.open("https://"+devices.value[idx].ip,"_blank")}
+function copyIP(i){navigator.clipboard.writeText(devices.value[i].ip)}
+function exportCSV(){if(!devices.value.length)return;var csv="﻿IP,MAC,\u5382\u5546,\u5907\u6CE8\n";devices.value.forEach(function(d){csv+=d.ip+","+d.mac+","+d.vendor+","+(d.isBmc?"BMC":"")+"\n"});var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="oobkit_"+new Date().toISOString().slice(0,10)+".csv";a.click()}
+async function setGatewayIP(){if(!selectedIface.value)return;var p=dhcp.startIP.split(".");var ip=p[0]+"."+p[1]+"."+p[2]+".1";await call("SetStaticIP",selectedIface.value,ip,dhcp.mask,"");await refreshInterfaces();dhcp.customIP=ip}
+async function setCustomIP(){if(!selectedIface.value||!dhcp.customIP)return;await call("SetStaticIP",selectedIface.value,dhcp.customIP,dhcp.mask,"");await refreshInterfaces()}
+async function startDHCP(){if(!selectedIface.value){alert("请先在探测器中选择网卡");return}var r=await call("StartDHCPServer",selectedIface.value,dhcp.startIP,dhcp.endIP,dhcp.mask,dhcp.gateway);if(r&&r.success){dhcpRunning.value=true;refreshDHCPLeases();leaseTimer=setInterval(refreshDHCPLeases,3000)}else alert((r&&r.message)||"启动失败")}
+async function stopDHCP(){await call("StopDHCPServer");dhcpRunning.value=false;dhcpLeases.value=[];if(leaseTimer){clearInterval(leaseTimer);leaseTimer=null}}
+async function refreshDHCPLeases(){var r=await call("GetDHCPLeases");if(r)dhcpLeases.value=r}
+async function exportFRU(){var r=await call("ExportFRU",fru.host,fru.user,fru.pass);if(r&&r.success){Object.assign(fruFields,r.fields);ipmiOutput.value="FRU 导出成功"}else alert((r&&r.message)||"导出失败")}
+async function saveFRUFile(){var sn=(fruFields["Product_SerialNumber"]||fruFields["Product_Serial"]||fruFields["Board_SerialNumber"]||"FRU").replace(/[\\/:*?\"<>|]/g,"_");var r=await call("SaveFRUFile",sn);if(r&&r.success)ipmiOutput.value="已保存: "+r.file;else alert((r&&r.message)||"保存失败")}
+async function importFRU(){if(!confirm("将修改后的字段写回BMC？"))return;var fields=JSON.parse(JSON.stringify(fruFields));var file=fruFields._file||"";var r=await call("ImportFRU",fru.host,fru.user,fru.pass,file,fields);if(r&&r.success)ipmiOutput.value="FRU 导入成功";else alert((r&&r.message)||"导入失败")}
+async function openFRUFile(){var r=await call("OpenFileDialog");if(r&&r.path){var fr=await call("OpenFRUFile",r.path);if(fr&&fr.success){Object.assign(fruFields,fr.fields);fruFields._file=fr.file;ipmiOutput.value="已打开: "+r.path}}}
+async function runIPMI(cmd){ipmiOutput.value="> "+cmd+"\n执行中...";var r=await call("ExecuteIPMI",fru.host,fru.user,fru.pass,cmd);ipmiOutput.value="> "+cmd+"\n"+(r&&r.output||r&&r.message||"无输出")}
+async function addIPMIButton(){var label=prompt("按钮名称:"),cmd=prompt("IPMI命令(如fru list):");if(label&&cmd){ipmiButtons.value.push({label:label,command:cmd});await call("SaveIPMIButtons",JSON.parse(JSON.stringify(ipmiButtons.value)))}}
+async function removeIPMIButton(i){ipmiButtons.value.splice(i,1);await call("SaveIPMIButtons",JSON.parse(JSON.stringify(ipmiButtons.value)))}
+async function checkNpcap(){var r=await call("CheckNpcap");if(!r||r.installed)return;if(confirm("未检测到 Npcap，BMC 探测功能需要它。\n\n将打开 Npcap 官网，请自行下载安装。\n（个人使用免费，商业用途需购买许可）")){await call("OpenNpcapWebsite")}}
+function setupEvents(){var on=(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.EventsOn)||(window.runtime&&window.runtime.EventsOn);if(!on)return;on("device-found",function(d){if(!devices.value.some(function(x){return x.ip===d.ip&&x.mac===d.mac}))devices.value.push(d)});on("scan-complete",function(){scanning.value=statusRunning.value=false});on("scan-error",function(m){scanning.value=statusRunning.value=false;alert("错误: "+m)});on("sniff-complete",function(){sniffing.value=statusRunning.value=false});on("log",function(msg){logContent.value=(logContent.value?logContent.value+"\n":"")+msg;logLines.value=logLines.value+1});on("dhcp-log",function(msg){dhcpLog.value=(dhcpLog.value?dhcpLog.value+"\n":"")+msg})}
+onMounted(async function(){setupEvents();await refreshInterfaces();document.addEventListener("keydown",function(e){if(e.key==="Escape")selectedRows.value=new Set()});var cfg=await call("GetConfig");if(cfg&&cfg.IPMIButtons&&cfg.IPMIButtons.length)ipmiButtons.value=cfg.IPMIButtons;checkNpcap()});
+return{tabs:tabs,currentView:currentView,interfaces:interfaces,selectedIface:selectedIface,devices:devices,scanning:scanning,sniffing:sniffing,statusRunning:statusRunning,selectedRows:selectedRows,showLog:showLog,logContent:logContent,logLines:logLines,bmcCount:bmcCount,fruHasFields:fruHasFields,fruFieldDefs:fruFieldDefs,currentIfaceName:currentIfaceName,currentIfaceIP:currentIfaceIP,dhcp:dhcp,dhcpRunning:dhcpRunning,dhcpLog:dhcpLog,dhcpLeases:dhcpLeases,refreshDHCPLeases:refreshDHCPLeases,fru:fru,fruFields:fruFields,ipmiButtons:ipmiButtons,ipmiOutput:ipmiOutput,logHeight:logHeight,startResize:startResize,winMin:winMin,winMax:winMax,winClose:winClose,cardClass:cardClass,refreshInterfaces:refreshInterfaces,setDefaultIface:setDefaultIface,toggleSniff:toggleSniff,stopAll:stopAll,autoConfigIP:autoConfigIP,toggleRow:toggleRow,selectOnly:selectOnly,selectAll:selectAll,openBrowser:openBrowser,copyIP:copyIP,exportCSV:exportCSV,setGatewayIP:setGatewayIP,setCustomIP:setCustomIP,startDHCP:startDHCP,stopDHCP:stopDHCP,exportFRU:exportFRU,saveFRUFile:saveFRUFile,importFRU:importFRU,openFRUFile:openFRUFile,runIPMI:runIPMI,addIPMIButton:addIPMIButton,removeIPMIButton:removeIPMIButton}
+}}).mount("#app");
+</script>
+</body>
+</html>
