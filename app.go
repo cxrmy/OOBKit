@@ -505,14 +505,21 @@ func (a *App) CheckNpcap() map[string]interface{} {
 	}
 }
 
+// OpenURL 用系统默认浏览器打开链接
+func (a *App) OpenURL(url string) map[string]interface{} {
+	if a.ctx == nil {
+		return map[string]interface{}{"success": false, "message": "应用未就绪"}
+	}
+	runtime.BrowserOpenURL(a.ctx, url)
+	return map[string]interface{}{"success": true}
+}
+
 // OpenNpcapWebsite 打开 Npcap 官网，由用户自行下载安装
 func (a *App) OpenNpcapWebsite() map[string]interface{} {
-	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", "https://npcap.com/")
-	hideCmdWindow(cmd)
-	if err := cmd.Start(); err != nil {
-		a.emitLog("打开 Npcap 官网失败: " + err.Error())
-		return map[string]interface{}{"success": false, "message": err.Error()}
+	if a.ctx == nil {
+		return map[string]interface{}{"success": false, "message": "应用未就绪"}
 	}
+	runtime.BrowserOpenURL(a.ctx, "https://npcap.com/")
 	a.emitLog("已打开 Npcap 官网，请用户自行下载安装")
 	return map[string]interface{}{"success": true, "message": "已打开官网"}
 }
