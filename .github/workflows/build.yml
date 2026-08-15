@@ -1,0 +1,56 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:PATH = "$(go env GOPATH)\bin;$env:PATH"
+          go mod download
+          wails build -clean
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OOBKit-windows-amd64
+          path: build/bin/OOBKit.exe
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: OOBKit-windows-amd64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: OOBKit.exe
+          generate_release_notes: true
