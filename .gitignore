@@ -8,7 +8,8 @@ bmcatcher
 OOBKit
 
 # Wails 构建产物
-build/
+build/bin/
+build/*.syso
 frontend/wailsjs/
 
 # Go
