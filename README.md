@@ -6,14 +6,20 @@
 
 ## ✨ 功能
 
-| 模块 | 说明 |
-|------|------|
-| 📡 BMC 探测器 | ARP 扫描/被动监听发现局域网内的 BMC，识别厂商（浪潮、华为、Dell、HPE 等），支持一键配网 |
-| 🏠 DHCP 服务器 | 内置轻量 DHCP 服务，给无 IP 的 BMC 分配地址，租约表格实时显示 |
-| 🔧 FRU / IPMI | FRU 信息导出/导入/保存，支持 IPMI 命令快捷执行（sel、mc、chassis、lan、fru、sensor 等 30+ 命令别名，以及 raw 十六进制） |
-| ℹ️ 关于 | 版本信息与作者信息 |
+| 模块           | 说明                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 📡 BMC 探测器  | ARP 扫描/被动监听发现局域网内的 BMC，识别厂商（浪潮、华为、Dell、HPE 等），支持一键配网                                 |
+| 🏠 DHCP 服务器 | 内置轻量 DHCP 服务，给无 IP 的 BMC 分配地址，租约表格实时显示                                                           |
+| 🔧 FRU / IPMI  | FRU 信息导出/导入/保存，支持 IPMI 命令快捷执行（sel、mc、chassis、lan、fru、sensor 等 30+ 命令别名，以及 raw 十六进制） |
+| ℹ️ 关于      | 版本信息与作者信息                                                                                                      |
 
-## 🛠 构建（Windows）
+## � 截图
+
+| BMC 探测器 | DHCP 服务器 | FRU / IPMI |
+| ---------- | ----------- | ---------- |
+| ![BMC 探测器](screenshots/main.png) | ![DHCP 服务器](screenshots/dhcp.png) | ![FRU / IPMI](screenshots/fru.png) |
+
+## �🛠 构建（Windows）
 
 ### 前置条件
 
@@ -49,15 +55,15 @@ wails dev
 
 ## 🎨 技术栈
 
-| 层 | 技术 |
-|----|------|
-| 桌面框架 | Wails v2 |
-| 后端 | Go + gopacket + go-ipmi |
-| 前端 | Vue 3 + 原生 HTML/CSS |
-| 抓包 | gopacket/pcap（调用 Npcap） |
-| IP 配置 | Windows netsh / PowerShell |
-| IPMI | github.com/bougou/go-ipmi |
-| DHCP | github.com/krolaw/dhcp4 |
+| 层       | 技术                        |
+| -------- | --------------------------- |
+| 桌面框架 | Wails v2                    |
+| 后端     | Go + gopacket + go-ipmi     |
+| 前端     | Vue 3 + 原生 HTML/CSS       |
+| 抓包     | gopacket/pcap（调用 Npcap） |
+| IP 配置  | Windows netsh / PowerShell  |
+| IPMI     | github.com/bougou/go-ipmi   |
+| DHCP     | github.com/krolaw/dhcp4     |
 
 ## 📁 项目结构
 
