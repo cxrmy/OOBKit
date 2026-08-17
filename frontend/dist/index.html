@@ -53,7 +53,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div class="flex-1 flex flex-col gap-1 p-3">
 <button v-for="tab in tabs" :key="tab.id" @click="currentView=tab.id" class="sidebar-btn w-full text-left px-3 py-2.5 text-[13px] rounded-r-lg" :class="{active:currentView===tab.id}"><span class="mr-2">{{tab.icon}}</span>{{tab.label}}</button>
 </div>
-<div class="flex items-center px-4 border-t border-[#30363D] h-9"><div class="text-[11px] text-[#484F58]">v2.0.1 · Go+Wails</div></div>
+<div class="flex items-center px-4 border-t border-[#30363D] h-9"><div class="text-[11px] text-[#484F58]">v2.1.0 · Go+Wails</div></div>
 </nav>
 <div class="flex-1 flex flex-col overflow-hidden">
 <div v-if="currentView==='probe'" class="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
@@ -148,7 +148,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div class="card w-[420px] text-center">
 <div class="text-5xl mb-3">🔧</div>
 <div class="text-xl font-bold text-[#58A6FF] mb-1">OOBKit</div>
-<div class="text-[13px] text-[#8B949E] mb-4">带外管理工具 v2.0.1</div>
+<div class="text-[13px] text-[#8B949E] mb-4">带外管理工具 v2.1.0</div>
 <div class="text-[13px] text-[#E6EDF3] leading-relaxed mb-5">
 集 BMC IP探测、DHCP 服务器、FRU 读写<br>与 IPMI 快捷命令于一体的带外运维工具箱。
 </div>
