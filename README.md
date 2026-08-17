@@ -90,6 +90,10 @@ wails dev
 
 本工具涉及修改网卡 IP、写 FRU、控制 BMC 等操作，请仅在你拥有管理权限的设备上使用。作者不对因使用本工具造成的任何损失负责。
 
+## 更新日志
+
+版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 许可证
 
 本项目采用 [GNU General Public License v3](LICENSE) 开源协议。
