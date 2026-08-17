@@ -117,10 +117,10 @@ var bmcHighlights = map[string]bool{
 // ─── 数据结构 ──────────────────────────────────────────────────────
 
 type DeviceInfo struct {
-	IP      string `json:"ip"`
-	MAC     string `json:"mac"`
-	Vendor  string `json:"vendor"`
-	IsBMC   bool   `json:"isBmc"`
+	IP       string `json:"ip"`
+	MAC      string `json:"mac"`
+	Vendor   string `json:"vendor"`
+	IsBMC    bool   `json:"isBmc"`
 	Hostname string `json:"hostname"`
 }
 
@@ -136,9 +136,9 @@ type InterfaceInfo struct {
 // ─── App ───────────────────────────────────────────────────────────
 
 type App struct {
-	ctx               context.Context
-	stopCh            chan struct{}
-	dhcpServer        *DHCPServer
+	ctx        context.Context
+	stopCh     chan struct{}
+	dhcpServer *DHCPServer
 }
 
 func NewApp() *App {
@@ -448,19 +448,9 @@ func (a *App) StartSniff(ifaceName string) {
 				a.emitLog("监听已停止")
 				return
 			case packet := <-packetSource.Packets():
-				if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
-					arp := arpLayer.(*layers.ARP)
-					if arp.Operation == layers.ARPReply || arp.Operation == layers.ARPRequest {
-						ip := netIPToString(arp.SourceProtAddress)
-						mac := netMACToString(arp.SourceHwAddress)
-						if ip != "" && ip != "0.0.0.0" && mac != "" && mac != myMAC {
-							vendor, isBMC := lookupOUI(mac)
-							runtime.EventsEmit(a.ctx, "device-found", DeviceInfo{
-								IP: ip, MAC: mac, Vendor: vendor, IsBMC: isBMC,
-							})
-						}
-					}
-				}
+				// 被动识别：ARP（免费ARP/请求应答）+ mDNS（BMC 周期通告）
+				// + DHCP + LLDP —— 零主动流量，详见 sniff_parse.go
+				a.parseSniffPacket(packet, myMAC)
 			}
 		}
 	}()
