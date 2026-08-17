@@ -90,6 +90,13 @@ wails dev
 
 本工具涉及修改网卡 IP、写 FRU、控制 BMC 等操作，请仅在你拥有管理权限的设备上使用。作者不对因使用本工具造成的任何损失负责。
 
+## 贡献者
+
+感谢以下贡献者：
+
+- [cxrmy](https://github.com/cxrmy) — 项目作者
+- [Izgenlre](https://github.com/Izgenlre) — mDNS/DHCP/LLDP 被动识别
+
 ## 更新日志
 
 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
