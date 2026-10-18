@@ -51,7 +51,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <nav class="w-[180px] flex-shrink-0 flex flex-col" style="background:#1E1E2E" data-wails-drag>
 <div class="px-4 py-5 border-b border-[#30363D]"><div class="text-lg font-bold text-[#58A6FF] tracking-tight">OOBKit</div><div class="text-[11px] text-[#8B949E]">带外管理工具</div></div>
 <div class="flex-1 flex flex-col gap-1 p-3">
-<button v-for="tab in tabs" :key="tab.id" @click="currentView=tab.id" class="sidebar-btn w-full text-left px-3 py-2.5 text-[13px] rounded-r-lg" :class="{active:currentView===tab.id}"><span class="mr-2">{{tab.icon}}</span>{{tab.label}}</button>
+<button v-for="tab in tabs" :key="tab.id" @click="switchTab(tab.id)" class="sidebar-btn w-full text-left px-3 py-2.5 text-[13px] rounded-r-lg" :class="{active:currentView===tab.id}"><span class="mr-2">{{tab.icon}}</span>{{tab.label}}</button>
 </div>
 <div class="flex items-center px-4 border-t border-[#30363D] h-9"><div class="text-[11px] text-[#484F58]">v2.1.0 · Go+Wails</div></div>
 </nav>
@@ -62,6 +62,9 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <select v-model="selectedIface" class="flex-1 max-w-[300px]"><option value="">选择网卡...</option><option v-for="iface in interfaces" :key="iface.name" :value="iface.name">{{iface.netshName||iface.description||iface.name}}{{iface.hasIp?' · '+iface.ip:' · ⬇'}}</option></select>
 <button class="btn" @click="refreshInterfaces">&#x1F504; 刷新</button>
 <button class="btn btn-sm" @click="setDefaultIface" :disabled="!selectedIface" title="保存为默认网卡">⭐ 默认</button>
+<span class="text-[11px] text-[#8B949E] whitespace-nowrap ml-1">掩码</span>
+<input v-model="probeMask" list="maskList" class="font-mono" style="width:150px" title="一键配网时写入的子网掩码">
+<datalist id="maskList"><option v-for="m in maskOptions" :value="m"></option></datalist>
 <span class="flex-1"></span>
 <button class="btn btn-green" @click="toggleSniff" :disabled="!selectedIface">{{sniffing?'⏹ 停止':'▶ 监听'}}</button>
 </div>
@@ -95,12 +98,16 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div class="flex items-end"><button class="btn btn-sm" @click="setGatewayIP">初始化</button></div>
 </div>
 <div class="flex gap-2 flex-shrink-0">
-<input v-model="dhcp.customIP" placeholder="自定义本机 IP" class="max-w-[180px] text-[14px]">
+<input v-model="dhcp.customIP" placeholder="自定义本机 IP" class="max-w-[150px] text-[14px] font-mono">
+<span class="text-[11px] text-[#8B949E] whitespace-nowrap">掩码</span>
+<input v-model="dhcp.customMask" placeholder="255.255.255.0" class="max-w-[140px] text-[14px] font-mono" title="自定义本机 IP 的掩码，留空则沿用 DHCP 子网掩码">
 <button class="btn btn-blue btn-sm" @click="setCustomIP">更改</button>
 <span class="flex-1"></span>
+<span v-if="dhcpRunning" class="text-[12px] self-center" style="color:#3FB950">● {{dhcpServerInfo}}</span>
 <button v-if="!dhcpRunning" class="btn btn-green" @click="startDHCP">启动 DHCP</button>
 <button v-else class="btn btn-red" @click="stopDHCP">停止 DHCP</button>
 </div>
+<div class="text-[11px] flex-shrink-0" style="color:#484F58">提示：网卡 IP 需与地址池同网段（可用「初始化」）；BMC 一直拿不到地址时，先确认 Windows 防火墙允许本程序接收 UDP 67，并检查广播是否被交换机/VLAN 隔离。</div>
 <div class="flex-1 flex flex-col min-h-0">
 <div class="flex items-center justify-between mb-1"><span class="text-[13px] text-[#8B949E]">租约</span><span class="text-[11px] text-[#484F58]">{{dhcpLeases.length}} 个</span></div>
 <div class="flex-1 flex flex-col gap-2 min-h-0">
@@ -115,6 +122,37 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div v-else class="text-[#484F58] text-sm flex-shrink-0">尚无租约</div>
 <div class="log-area flex-1 p-3" style="min-height:60px">{{dhcpLog||'活动日志'}}</div>
 </div>
+</div>
+</div>
+<div v-if="currentView==='vlan'" class="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
+<div class="card flex items-center gap-3 flex-shrink-0 text-[13px]">
+<label class="text-[11px] text-[#8B949E] whitespace-nowrap">网卡</label>
+<select v-model="vlanIface" class="flex-1 max-w-[320px]" @change="syncVLANFromIface"><option value="">选择网卡...</option><option v-for="ad in vlanAdapters" :key="ad.name" :value="ad.name">{{ad.name}} · {{ad.supported?('VLAN '+ad.vlanId):'驱动不支持'}}{{ad.status==='Up'?'':' · '+ad.status}}</option></select>
+<button class="btn" @click="refreshVLAN" :disabled="vlanBusy">&#x1F504; 刷新</button>
+<span class="flex-1"></span>
+<span class="text-[11px] text-[#484F58]">VLAN 0 = 关闭标签</span>
+</div>
+<div class="card flex-shrink-0 grid grid-cols-4 gap-3 text-[13px] items-end">
+<div><label class="text-[#8B949E]">当前 VLAN</label><div class="font-mono text-[15px] py-1" style="color:#58A6FF">{{vlanCurrent}}</div></div>
+<div><label class="text-[#8B949E]">VLAN ID (0-4094)</label><input v-model="vlanId" class="font-mono" list="vlanList" placeholder="例如 100"><datalist id="vlanList"><option value="0"></option><option value="1"></option><option value="10"></option><option value="100"></option><option value="200"></option><option value="4094"></option></datalist></div>
+<div class="flex items-center gap-2 pb-1.5"><label class="flex items-center gap-1 text-[12px] text-[#8B949E] cursor-pointer"><input type="checkbox" v-model="vlanRestart" style="width:auto"> 应用后重启网卡</label></div>
+<div class="flex gap-2 pb-0.5"><button class="btn btn-blue btn-sm" :disabled="!vlanIface||vlanBusy" @click="applyVLAN">{{vlanBusy?'处理中...':'应用'}}</button><button class="btn btn-sm" :disabled="!vlanIface||vlanBusy" @click="clearVLAN">清除</button></div>
+</div>
+<div class="text-[12px] flex-shrink-0" style="color:#D29922">⚠ 修改 VLAN 会重置该网卡链路：正在传输的连接（含本工具的扫描/监听）会中断；交换机端口若不是 Trunk 或未放行该 VLAN，设置后会完全不通，请确保还有 iBMC/Console 通道可用。</div>
+<div class="flex-1 flex flex-col min-h-0">
+<div class="flex items-center justify-between mb-1 flex-shrink-0"><span class="text-[13px] text-[#8B949E]">网卡列表（点击行可选中）</span><span class="text-[11px] text-[#484F58]">{{vlanAdapters.length}} 块 · 支持 {{vlanSupportedCount}} 块</span></div>
+<div class="flex-shrink-0 overflow-auto" style="max-height:190px">
+<table class="w-full text-[12px]"><thead class="text-[#8B949E] text-left"><tr><th class="p-1.5">名称</th><th class="p-1.5">型号描述</th><th class="p-1.5">MAC</th><th class="p-1.5">状态</th><th class="p-1.5">VLAN</th><th class="p-1.5">驱动关键字</th></tr></thead>
+<tbody><tr v-for="ad in vlanAdapters" :key="ad.name" class="border-t border-[#30363D] cursor-pointer" :style="vlanIface===ad.name?'background:#1C2128':''" @click="pickVLAN(ad)">
+<td class="p-1.5 text-[#E6EDF3]">{{ad.name}}</td>
+<td class="p-1.5 text-[#8B949E]">{{ad.description}}</td>
+<td class="p-1.5 font-mono">{{ad.mac||'-'}}</td>
+<td class="p-1.5 text-[#8B949E]">{{ad.status}}</td>
+<td class="p-1.5 font-mono" style="color:#3FB950">{{ad.supported?(ad.vlanId===''?'-':ad.vlanId):'-'}}</td>
+<td class="p-1.5 font-mono" :style="{color:ad.supported?'#58A6FF':'#F85149'}">{{ad.supported?ad.keyword:'不支持'}}</td>
+</tr></tbody></table>
+</div>
+<div class="log-area flex-1 p-3 mt-2" style="min-height:70px">{{vlanOutput||'操作输出'}}</div>
 </div>
 </div>
 <div v-if="currentView==='fru'" class="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
@@ -150,7 +188,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div class="text-xl font-bold text-[#58A6FF] mb-1">OOBKit</div>
 <div class="text-[13px] text-[#8B949E] mb-4">带外管理工具 v2.1.0</div>
 <div class="text-[13px] text-[#E6EDF3] leading-relaxed mb-5">
-集 BMC IP探测、DHCP 服务器、FRU 读写<br>与 IPMI 快捷命令于一体的带外运维工具箱。
+集 BMC IP探测、DHCP 服务器、网卡 VLAN 配置<br>与 FRU 读写、IPMI 快捷命令于一体。
 </div>
 <div class="border-t border-[#30363D] pt-4 mb-4">
 <div class="text-[11px] text-[#8B949E] uppercase tracking-wide mb-2">关注公众号</div>
@@ -179,15 +217,15 @@ GitHub 仓库
 <script>
 const{createApp,ref,reactive,computed,onMounted}=Vue;
 createApp({setup(){
-const tabs=[{id:"probe",label:"BMC 探测器",icon:"📡"},{id:"dhcp",label:"DHCP 服务器",icon:"🏠"},{id:"fru",label:"FRU / IPMI",icon:"🔧"},{id:"about",label:"关于",icon:"ℹ️"}];
+const tabs=[{id:"probe",label:"BMC 探测器",icon:"📡"},{id:"dhcp",label:"DHCP 服务器",icon:"🏠"},{id:"vlan",label:"网卡 VLAN",icon:"🏷️"},{id:"fru",label:"FRU / IPMI",icon:"🔧"},{id:"about",label:"关于",icon:"ℹ️"}];
 const currentView=ref("probe");
 const interfaces=ref([]),selectedIface=ref(""),devices=ref([]);
 const scanning=ref(false),sniffing=ref(false),statusRunning=ref(false);
 const selectedRows=ref(new Set());
 const showLog=ref(false),logContent=ref(""),logLines=ref(0);
 const backend=window.go&&window.go.main&&window.go.main.App;
-const dhcp=reactive({startIP:"192.168.1.2",endIP:"192.168.1.253",mask:"255.255.255.0",gateway:"192.168.1.1",customIP:""});
-const dhcpRunning=ref(false),dhcpLog=ref(""),dhcpLeases=ref([]);
+const dhcp=reactive({startIP:"192.168.1.2",endIP:"192.168.1.253",mask:"255.255.255.0",gateway:"192.168.1.1",customIP:"",customMask:""});
+const dhcpRunning=ref(false),dhcpLog=ref(""),dhcpLeases=ref([]),dhcpServerInfo=ref("");
 let leaseTimer=null;
 const fru=reactive({host:"",user:"admin",pass:""});
 const fruFields=reactive({});
@@ -213,6 +251,23 @@ const fruFieldDefs=[
 const ipmiButtons=ref([]);
 const ipmiOutput=ref("");
 const logHeight=ref(120);
+const probeMask=ref("255.255.255.0");
+const maskOptions=["255.255.255.0","255.255.254.0","255.255.255.128","255.255.255.192","255.255.255.224","255.255.255.240","255.255.255.248","255.255.255.252","255.255.0.0","255.0.0.0"];
+const vlanAdapters=ref([]),vlanIface=ref(""),vlanId=ref("0"),vlanRestart=ref(true),vlanBusy=ref(false),vlanOutput=ref("");
+function isValidIPv4(s){if(!/^(\d{1,3}\.){3}\d{1,3}$/.test(s))return false;return s.split(".").every(function(x){return +x>=0&&+x<=255})}
+function ipToInt(s){var p=s.split(".").map(Number);return (((p[0]<<24)>>>0)+(p[1]<<16)+(p[2]<<8)+p[3])>>>0}
+function intToIP(n){return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join(".")}
+function isValidMask(s){if(!isValidIPv4(s))return false;var inv=(~ipToInt(s))>>>0;return (((inv+1)>>>0)&inv)===0}
+function sameSubnet(a,b,mask){if(!isValidIPv4(a)||!isValidIPv4(b)||!isValidMask(mask))return true;var m=ipToInt(mask)>>>0;return ((ipToInt(a)&m)>>>0)===((ipToInt(b)&m)>>>0)}
+function guessHostIP(ip,mask){if(!isValidIPv4(ip)||!isValidMask(mask))return "192.168.1.1";var m=ipToInt(mask);var net=(ipToInt(ip)&m)>>>0;var host=(~m)>>>0;if(host<=1)return intToIP(net);var cand=(net+1)>>>0;if(cand===ipToInt(ip)&&host>2)cand=(net+2)>>>0;return intToIP(cand)}
+const vlanCurrent=computed(function(){var ad=vlanAdapters.value.find(function(x){return x.name===vlanIface.value});if(!ad)return "-";if(!ad.supported)return "不支持";return ad.vlanId===""?"-":ad.vlanId});
+const vlanSupportedCount=computed(function(){return vlanAdapters.value.filter(function(x){return x.supported}).length});
+async function switchTab(id){currentView.value=id;if(id==="vlan")await refreshVLAN()}
+async function refreshVLAN(){if(!backend)return;vlanOutput.value="正在枚举网卡...";var r=await call("GetVLANAdapters");vlanAdapters.value=r||[];if(!vlanAdapters.value.some(function(a){return a.name===vlanIface.value}))vlanIface.value=vlanAdapters.value.length?vlanAdapters.value[0].name:"";syncVLANFromIface();vlanOutput.value=vlanAdapters.value.length?("已发现 "+vlanAdapters.value.length+" 块网卡，"+vlanSupportedCount.value+" 块支持 VLAN ID"):"未发现网卡"}
+function syncVLANFromIface(){var ad=vlanAdapters.value.find(function(x){return x.name===vlanIface.value});if(ad&&ad.supported&&ad.vlanId!=="")vlanId.value=ad.vlanId}
+function pickVLAN(ad){vlanIface.value=ad.name;syncVLANFromIface();var m=interfaces.value.find(function(x){return x.netshName===ad.name||x.description===ad.description});if(m)selectedIface.value=m.name}
+async function applyVLAN(){if(!vlanIface.value)return;var id=parseInt(String(vlanId.value).trim(),10);if(isNaN(id)||id<0||id>4094){alert("VLAN ID 必须是 0-4094 的整数（0 表示关闭）");return}var tip="将 "+vlanIface.value+" 的 VLAN 设置为 "+id+"？";if(id===0)tip+="\n（0 表示关闭 802.1Q 标签）";if(!confirm(tip+"\n"+(vlanRestart.value?"网卡会被重启，链路会中断。":"不重启网卡，需手动禁用/启用后生效。")))return;vlanBusy.value=true;vlanOutput.value="正在设置...";try{var r=await call("SetVLAN",vlanIface.value,id,vlanRestart.value===true);vlanOutput.value=(r&&r.message)||"无返回"}finally{vlanBusy.value=false}await refreshVLAN();await refreshInterfaces()}
+async function clearVLAN(){if(!vlanIface.value)return;if(!confirm("关闭 "+vlanIface.value+" 的 VLAN 标签（VLAN ID 置 0）？"))return;vlanBusy.value=true;vlanOutput.value="正在清除...";try{var r=await call("ClearVLAN",vlanIface.value,vlanRestart.value===true);vlanOutput.value=(r&&r.message)||"无返回"}finally{vlanBusy.value=false}await refreshVLAN();await refreshInterfaces()}
 let rszEl=null,rszStartY=0,rszStartH=0;
 function startResize(e){rszEl=e.target.parentElement.querySelector(".log-area");rszStartY=e.clientY;rszStartH=rszEl.offsetHeight;document.addEventListener("mousemove",onResize);document.addEventListener("mouseup",stopResize);e.preventDefault()}
 function onResize(e){if(!rszEl)return;var h=rszStartH+rszStartY-e.clientY;logHeight.value=Math.max(40,Math.min(h,600));rszEl.style.height=logHeight.value+"px"}
@@ -228,9 +283,9 @@ function cardClass(idx,dev){var c=[];if(selectedRows.value.has(idx))c.push("sele
 async function call(m){var a=[];for(var i=1;i<arguments.length;i++)a.push(arguments[i]);if(!backend)return null;try{return await backend[m].apply(backend,a)}catch(e){console.error(e);return null}}
 async function refreshInterfaces(){var r=await call("GetInterfaces");if(r){interfaces.value=r;var cfg=await call("GetConfig");if(cfg&&cfg.DefaultIface){var found=r.find(function(i){return i.name===cfg.DefaultIface||i.netshName===cfg.DefaultIface});if(found)selectedIface.value=found.name}if(!selectedIface.value&&r.length)selectedIface.value=r[0].name}}
 async function setDefaultIface(){if(!selectedIface.value)return;await call("SetDefaultIface",selectedIface.value);alert("默认网卡已保存")}
-async function toggleSniff(){if(sniffing.value){await call("StopAll");sniffing.value=statusRunning.value=false;return}if(!selectedIface.value)return;sniffing.value=statusRunning.value=true;alert("监听已启动！请拔插一次网线或将BMC接入网络。");await call("StartSniff",selectedIface.value)}
+async function toggleSniff(){if(sniffing.value){await call("StopAll");sniffing.value=statusRunning.value=false;return}if(!selectedIface.value)return;var r=await call("StartSniff",selectedIface.value);if(r&&r.success===false){alert("监听失败: "+((r&&r.message)||"未知错误"));sniffing.value=statusRunning.value=false;return}sniffing.value=statusRunning.value=true;alert("监听已启动！请拔插一次网线或将BMC接入网络。")}
 async function stopAll(){await call("StopAll");scanning.value=sniffing.value=statusRunning.value=false}
-async function autoConfigIP(){if(!selectedRows.value.size||!selectedIface.value)return;var d=devices.value[Array.from(selectedRows.value)[0]];var p=d.ip.split(".");var def=p[0]+"."+p[1]+"."+p[2]+".1";var ip=prompt("配置本机IP:",def);if(!ip)return;await call("SetStaticIP",selectedIface.value,ip,"255.255.255.0","");await refreshInterfaces()}
+async function autoConfigIP(){if(!selectedRows.value.size||!selectedIface.value)return;var d=devices.value[Array.from(selectedRows.value)[0]];var mask=(probeMask.value||"").trim()||"255.255.255.0";if(!isValidMask(mask)){alert("子网掩码无效: "+mask+"\n请填写形如 255.255.255.0 的连续掩码");return}var def=guessHostIP(d.ip,mask);var ip=prompt("配置本机IP（掩码 "+mask+"，BMC "+d.ip+"）:",def);if(!ip)return;if(!isValidIPv4(ip)){alert("IP 格式无效: "+ip);return}var r=await call("SetStaticIP",selectedIface.value,ip,mask,"");if(r&&r.success===false)alert("配置失败: "+((r&&r.message)||""));await refreshInterfaces()}
 function toggleRow(i,e){var s=new Set(selectedRows.value);if(e.ctrlKey||e.metaKey)s.has(i)?s.delete(i):s.add(i);else{s.clear();s.add(i)}selectedRows.value=s}
 function selectOnly(i){selectedRows.value=new Set([i])}
 function selectAll(){selectedRows.value=new Set(devices.value.map(function(_,i){return i}))}
@@ -238,10 +293,13 @@ function openBrowser(i){var idx=i;if(idx===undefined&&selectedRows.value.size)id
 function copyIP(i){navigator.clipboard.writeText(devices.value[i].ip)}
 function exportCSV(){if(!devices.value.length)return;var csv="﻿IP,MAC,\u5382\u5546,\u5907\u6CE8\n";devices.value.forEach(function(d){csv+=d.ip+","+d.mac+","+d.vendor+","+(d.isBmc?"BMC":"")+"\n"});var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="oobkit_"+new Date().toISOString().slice(0,10)+".csv";a.click()}
 async function setGatewayIP(){if(!selectedIface.value)return;var p=dhcp.startIP.split(".");var ip=p[0]+"."+p[1]+"."+p[2]+".1";await call("SetStaticIP",selectedIface.value,ip,dhcp.mask,"");await refreshInterfaces();dhcp.customIP=ip}
-async function setCustomIP(){if(!selectedIface.value||!dhcp.customIP)return;await call("SetStaticIP",selectedIface.value,dhcp.customIP,dhcp.mask,"");await refreshInterfaces()}
-async function startDHCP(){if(!selectedIface.value){alert("请先在探测器中选择网卡");return}var r=await call("StartDHCPServer",selectedIface.value,dhcp.startIP,dhcp.endIP,dhcp.mask,dhcp.gateway);if(r&&r.success){dhcpRunning.value=true;refreshDHCPLeases();leaseTimer=setInterval(refreshDHCPLeases,3000)}else alert((r&&r.message)||"启动失败")}
-async function stopDHCP(){await call("StopDHCPServer");dhcpRunning.value=false;dhcpLeases.value=[];if(leaseTimer){clearInterval(leaseTimer);leaseTimer=null}}
+async function setCustomIP(){if(!selectedIface.value||!dhcp.customIP)return;var mask=(dhcp.customMask||"").trim()||dhcp.mask;if(!isValidIPv4(dhcp.customIP)){alert("IP 格式无效: "+dhcp.customIP);return}if(!isValidMask(mask)){alert("子网掩码无效: "+mask+"\n请填写形如 255.255.255.0 的连续掩码");return}if(!sameSubnet(dhcp.customIP,dhcp.startIP,mask)){if(!confirm("本机 IP "+dhcp.customIP+"/"+mask+" 与地址池起始 "+dhcp.startIP+" 不在同一网段，DHCP 租约可能不通。\n仍然继续？"))return}else if(ipToInt(dhcp.customIP)>=ipToInt(dhcp.startIP)&&ipToInt(dhcp.customIP)<=ipToInt(dhcp.endIP)){if(!confirm("本机 IP "+dhcp.customIP+" 落在 DHCP 地址池 "+dhcp.startIP+"~"+dhcp.endIP+" 内，可能与租约冲突。\n仍然继续？"))return}var r=await call("SetStaticIP",selectedIface.value,dhcp.customIP,mask,"");if(r&&r.success===false)alert("配置失败: "+((r&&r.message)||""));await refreshInterfaces()}
+function validatePool(){if(!isValidIPv4(dhcp.startIP))return "起始 IP 格式无效: "+dhcp.startIP;if(!isValidIPv4(dhcp.endIP))return "结束 IP 格式无效: "+dhcp.endIP;if(!isValidMask(dhcp.mask))return "子网掩码无效: "+dhcp.mask;if(ipToInt(dhcp.startIP)>ipToInt(dhcp.endIP))return "起始 IP 不能大于结束 IP";if(!sameSubnet(dhcp.startIP,dhcp.endIP,dhcp.mask))return "起始与结束 IP 不在同一网段（掩码 "+dhcp.mask+"）";if(dhcp.gateway&&!isValidIPv4(dhcp.gateway))return "网关格式无效: "+dhcp.gateway;return ""}
+async function startDHCP(){if(!selectedIface.value){alert("请先在探测器中选择网卡");return}var err=validatePool();if(err){alert(err);return}var r=await call("StartDHCPServer",selectedIface.value,dhcp.startIP,dhcp.endIP,dhcp.mask,dhcp.gateway);if(r&&r.success){dhcpRunning.value=true;dhcpServerInfo.value=r.message||"";appendDHCPLog("✔ "+(r.message||"DHCP 已启动"));refreshDHCPLeases();leaseTimer=setInterval(refreshDHCPLeases,3000)}else{dhcpRunning.value=false;dhcpServerInfo.value="";alert((r&&r.message)||"启动失败")}}
+async function stopDHCP(){await call("StopDHCPServer");dhcpRunning.value=false;dhcpServerInfo.value="";dhcpLeases.value=[];if(leaseTimer){clearInterval(leaseTimer);leaseTimer=null}}
 async function refreshDHCPLeases(){var r=await call("GetDHCPLeases");if(r)dhcpLeases.value=r}
+function appendDHCPLog(m){dhcpLog.value=(dhcpLog.value?dhcpLog.value+"\n":"")+m}
+async function refreshDHCPStatus(){var r=await call("GetDHCPStatus");if(r&&r.running){dhcpRunning.value=true;dhcpServerInfo.value="服务端 "+r.serverIp+" · 池 "+r.pool;refreshDHCPLeases();if(!leaseTimer)leaseTimer=setInterval(refreshDHCPLeases,3000)}else{dhcpRunning.value=false;dhcpServerInfo.value=""}}
 async function exportFRU(){var r=await call("ExportFRU",fru.host,fru.user,fru.pass);if(r&&r.success){Object.assign(fruFields,r.fields);ipmiOutput.value="FRU 导出成功"}else alert((r&&r.message)||"导出失败")}
 async function saveFRUFile(){var sn=(fruFields["Product_SerialNumber"]||fruFields["Product_Serial"]||fruFields["Board_SerialNumber"]||"FRU").replace(/[\\/:*?\"<>|]/g,"_");var r=await call("SaveFRUFile",sn);if(r&&r.success)ipmiOutput.value="已保存: "+r.file;else alert((r&&r.message)||"保存失败")}
 async function importFRU(){if(!confirm("将修改后的字段写回BMC？"))return;var fields=JSON.parse(JSON.stringify(fruFields));var file=fruFields._file||"";var r=await call("ImportFRU",fru.host,fru.user,fru.pass,file,fields);if(r&&r.success)ipmiOutput.value="FRU 导入成功";else alert((r&&r.message)||"导入失败")}
@@ -251,9 +309,9 @@ async function addIPMIButton(){var label=prompt("按钮名称:"),cmd=prompt("IPM
 async function removeIPMIButton(i){ipmiButtons.value.splice(i,1);await call("SaveIPMIButtons",JSON.parse(JSON.stringify(ipmiButtons.value)))}
 async function checkNpcap(){var r=await call("CheckNpcap");if(!r||r.installed)return;if(confirm("未检测到 Npcap，BMC 探测功能需要它。\n\n将打开 Npcap 官网，请自行下载安装。\n（个人使用免费，商业用途需购买许可）")){await call("OpenNpcapWebsite")}}
 function openGitHub(){call("OpenURL","https://github.com/cxrmy/OOBKit")}
-function setupEvents(){var on=(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.EventsOn)||(window.runtime&&window.runtime.EventsOn);if(!on)return;on("device-found",function(d){if(!devices.value.some(function(x){return x.ip===d.ip&&x.mac===d.mac}))devices.value.push(d)});on("scan-complete",function(){scanning.value=statusRunning.value=false});on("scan-error",function(m){scanning.value=statusRunning.value=false;alert("错误: "+m)});on("sniff-complete",function(){sniffing.value=statusRunning.value=false});on("log",function(msg){logContent.value=(logContent.value?logContent.value+"\n":"")+msg;logLines.value=logLines.value+1});on("dhcp-log",function(msg){dhcpLog.value=(dhcpLog.value?dhcpLog.value+"\n":"")+msg})}
-onMounted(async function(){setupEvents();await refreshInterfaces();document.addEventListener("keydown",function(e){if(e.key==="Escape")selectedRows.value=new Set()});var cfg=await call("GetConfig");if(cfg&&cfg.IPMIButtons&&cfg.IPMIButtons.length)ipmiButtons.value=cfg.IPMIButtons;checkNpcap()});
-return{tabs:tabs,currentView:currentView,interfaces:interfaces,selectedIface:selectedIface,devices:devices,scanning:scanning,sniffing:sniffing,statusRunning:statusRunning,selectedRows:selectedRows,showLog:showLog,logContent:logContent,logLines:logLines,bmcCount:bmcCount,fruHasFields:fruHasFields,fruFieldDefs:fruFieldDefs,currentIfaceName:currentIfaceName,currentIfaceIP:currentIfaceIP,dhcp:dhcp,dhcpRunning:dhcpRunning,dhcpLog:dhcpLog,dhcpLeases:dhcpLeases,refreshDHCPLeases:refreshDHCPLeases,fru:fru,fruFields:fruFields,ipmiButtons:ipmiButtons,ipmiOutput:ipmiOutput,logHeight:logHeight,startResize:startResize,winMin:winMin,winMax:winMax,winClose:winClose,openGitHub:openGitHub,cardClass:cardClass,refreshInterfaces:refreshInterfaces,setDefaultIface:setDefaultIface,toggleSniff:toggleSniff,stopAll:stopAll,autoConfigIP:autoConfigIP,toggleRow:toggleRow,selectOnly:selectOnly,selectAll:selectAll,openBrowser:openBrowser,copyIP:copyIP,exportCSV:exportCSV,setGatewayIP:setGatewayIP,setCustomIP:setCustomIP,startDHCP:startDHCP,stopDHCP:stopDHCP,exportFRU:exportFRU,saveFRUFile:saveFRUFile,importFRU:importFRU,openFRUFile:openFRUFile,runIPMI:runIPMI,addIPMIButton:addIPMIButton,removeIPMIButton:removeIPMIButton}
+function setupEvents(){var on=(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.EventsOn)||(window.runtime&&window.runtime.EventsOn);if(!on)return;on("device-found",function(d){if(!devices.value.some(function(x){return x.ip===d.ip&&x.mac===d.mac}))devices.value.push(d)});on("scan-complete",function(){scanning.value=statusRunning.value=false});on("scan-error",function(m){scanning.value=statusRunning.value=false;alert("错误: "+m)});on("sniff-error",function(m){sniffing.value=statusRunning.value=false;alert("监听错误: "+m)});on("sniff-complete",function(){sniffing.value=statusRunning.value=false});on("log",function(msg){logContent.value=(logContent.value?logContent.value+"\n":"")+msg;logLines.value=logLines.value+1});on("dhcp-log",function(msg){dhcpLog.value=(dhcpLog.value?dhcpLog.value+"\n":"")+msg})}
+onMounted(async function(){setupEvents();await refreshInterfaces();refreshDHCPStatus();document.addEventListener("keydown",function(e){if(e.key==="Escape")selectedRows.value=new Set()});var cfg=await call("GetConfig");if(cfg&&cfg.IPMIButtons&&cfg.IPMIButtons.length)ipmiButtons.value=cfg.IPMIButtons;checkNpcap()});
+return{tabs:tabs,currentView:currentView,interfaces:interfaces,selectedIface:selectedIface,devices:devices,scanning:scanning,sniffing:sniffing,statusRunning:statusRunning,selectedRows:selectedRows,showLog:showLog,logContent:logContent,logLines:logLines,bmcCount:bmcCount,fruHasFields:fruHasFields,fruFieldDefs:fruFieldDefs,currentIfaceName:currentIfaceName,currentIfaceIP:currentIfaceIP,dhcp:dhcp,dhcpRunning:dhcpRunning,dhcpLog:dhcpLog,dhcpLeases:dhcpLeases,dhcpServerInfo:dhcpServerInfo,refreshDHCPLeases:refreshDHCPLeases,refreshDHCPStatus:refreshDHCPStatus,fru:fru,fruFields:fruFields,ipmiButtons:ipmiButtons,ipmiOutput:ipmiOutput,logHeight:logHeight,startResize:startResize,winMin:winMin,winMax:winMax,winClose:winClose,openGitHub:openGitHub,cardClass:cardClass,refreshInterfaces:refreshInterfaces,switchTab:switchTab,probeMask:probeMask,maskOptions:maskOptions,vlanAdapters:vlanAdapters,vlanIface:vlanIface,vlanId:vlanId,vlanRestart:vlanRestart,vlanBusy:vlanBusy,vlanOutput:vlanOutput,vlanCurrent:vlanCurrent,vlanSupportedCount:vlanSupportedCount,refreshVLAN:refreshVLAN,syncVLANFromIface:syncVLANFromIface,pickVLAN:pickVLAN,applyVLAN:applyVLAN,clearVLAN:clearVLAN,setDefaultIface:setDefaultIface,toggleSniff:toggleSniff,stopAll:stopAll,autoConfigIP:autoConfigIP,toggleRow:toggleRow,selectOnly:selectOnly,selectAll:selectAll,openBrowser:openBrowser,copyIP:copyIP,exportCSV:exportCSV,setGatewayIP:setGatewayIP,setCustomIP:setCustomIP,startDHCP:startDHCP,stopDHCP:stopDHCP,exportFRU:exportFRU,saveFRUFile:saveFRUFile,importFRU:importFRU,openFRUFile:openFRUFile,runIPMI:runIPMI,addIPMIButton:addIPMIButton,removeIPMIButton:removeIPMIButton}
 }}).mount("#app");
 </script>
 </body>

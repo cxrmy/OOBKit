@@ -517,6 +517,21 @@ func (a *App) OpenNpcapWebsite() map[string]interface{} {
 // ─── IP 配置 ──────────────────────────────────────────────────────
 
 func (a *App) SetStaticIP(iface, ip, mask, gateway string) map[string]interface{} {
+	// 参数校验：netsh 的报错信息晦涩，先在 Go 侧拦掉明显的格式问题
+	if v := net.ParseIP(ip); v == nil || v.To4() == nil {
+		a.emitLog("配网失败: IP 格式无效 " + ip)
+		return map[string]interface{}{"success": false, "message": "IP 地址格式无效: " + ip}
+	}
+	if !validIPv4Mask(mask) {
+		a.emitLog("配网失败: 子网掩码无效 " + mask)
+		return map[string]interface{}{"success": false, "message": "子网掩码无效: " + mask + "（示例 255.255.255.0）"}
+	}
+	if gateway != "" {
+		if g := net.ParseIP(gateway); g == nil || g.To4() == nil {
+			a.emitLog("配网失败: 网关格式无效 " + gateway)
+			return map[string]interface{}{"success": false, "message": "网关地址格式无效: " + gateway}
+		}
+	}
 	// 将 pcap 设备名翻译为 netsh 可用的友好名称
 	guid := extractGUIDFromPcapName(iface)
 	netshName := getNetshName(iface)
@@ -544,7 +559,7 @@ func (a *App) SetStaticIP(iface, ip, mask, gateway string) map[string]interface{
 		a.emitLog("配网失败: " + string(out))
 		return map[string]interface{}{"success": false, "message": string(out)}
 	}
-	a.emitLog("配网成功: " + netshName + " → " + ip)
+	a.emitLog(fmt.Sprintf("配网成功: %s → %s/%s", netshName, ip, mask))
 	return map[string]interface{}{"success": true, "message": "配置成功"}
 }
 
@@ -589,6 +604,16 @@ func lookupOUI(mac string) (string, bool) {
 		}
 	}
 	return vendor, false
+}
+
+// validIPv4Mask 校验点分十进制掩码是否为合法的连续掩码
+func validIPv4Mask(mask string) bool {
+	v := net.ParseIP(mask)
+	if v == nil || v.To4() == nil {
+		return false
+	}
+	ones, bits := net.IPMask(v.To4()).Size()
+	return bits == 32 && ones >= 0
 }
 
 func expandSubnet(subnet string) []string {
