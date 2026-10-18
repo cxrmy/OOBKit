@@ -60,7 +60,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div class="card flex items-center gap-3 flex-shrink-0">
 <label class="text-[11px] text-[#8B949E] whitespace-nowrap">网卡</label>
 <select v-model="selectedIface" class="flex-1 max-w-[300px]"><option value="">选择网卡...</option><option v-for="iface in interfaces" :key="iface.name" :value="iface.name">{{iface.netshName||iface.description||iface.name}}{{iface.hasIp?' · '+iface.ip:' · ⬇'}}</option></select>
-<button class="btn" @click="refreshInterfaces">&#x1F504; 刷新</button>
+<button class="btn" @click="refreshInterfaces" :disabled="ifaceBusy">&#x1F504; 刷新</button>
 <button class="btn btn-sm" @click="setDefaultIface" :disabled="!selectedIface" title="保存为默认网卡">⭐ 默认</button>
 <span class="text-[11px] text-[#8B949E] whitespace-nowrap ml-1">掩码</span>
 <input v-model="probeMask" list="maskList" class="font-mono" style="width:150px" title="一键配网时写入的子网掩码">
@@ -74,6 +74,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <span v-if="scanning||sniffing" style="color:#3FB950">{{sniffing?'监听中':'扫描中'}}</span>
 <span class="flex-1"></span>
 <button class="btn btn-sm" @click="selectAll">全选</button>
+<button class="btn btn-sm" @click="clearDevices" :disabled="!devices.length" title="清空设备列表">清空</button>
 <button class="btn btn-sm" @click="exportCSV" :disabled="!devices.length">CSV</button>
 </div>
 <div class="flex-1 overflow-auto" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;align-content:start">
@@ -120,7 +121,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 </tr></tbody></table>
 </div>
 <div v-else class="text-[#484F58] text-sm flex-shrink-0">尚无租约</div>
-<div class="log-area flex-1 p-3" style="min-height:60px">{{dhcpLog||'活动日志'}}</div>
+<div class="log-area flex-1 p-3" style="min-height:60px" ref="dhcpLogBox">{{dhcpLog||'活动日志'}}</div>
 </div>
 </div>
 </div>
@@ -179,7 +180,7 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div class="flex gap-2 flex-wrap"><template v-for="(btn,i) in ipmiButtons" :key="i"><button class="btn btn-sm" @click="runIPMI(btn.command)">{{btn.label}}</button><button class="text-[#F85149] text-[10px] cursor-pointer" @click="removeIPMIButton(i)">x</button></template></div></div>
 <div class="flex-shrink-0" style="position:relative">
 <div @mousedown="startResize" class="resize-handle" style="height:6px;cursor:ns-resize;margin-bottom:2px;border-radius:3px;background:transparent;transition:background .15s" @mouseenter="$event.target.style.background='#30363D'" @mouseleave="$event.target.style.background='transparent'"></div>
-<div class="log-area" :style="{height:logHeight+'px'}" style="resize:none;transition:height .1s ease-out">{{ipmiOutput||'点击快捷命令查看输出'}}</div>
+<div class="log-area" :style="{height:logHeight+'px'}" style="resize:none;transition:height .1s ease-out" ref="ipmiBox">{{ipmiOutput||'点击快捷命令查看输出'}}</div>
 </div>
 </div>
 <div v-if="currentView==='about'" class="flex-1 flex items-center justify-center p-4 overflow-auto">
@@ -207,15 +208,16 @@ GitHub 仓库
 <div class="status-bar flex items-center px-4 gap-4 h-9"><span>网卡: <b>{{currentIfaceName}}</b></span><span>IP: <b>{{currentIfaceIP}}</b></span><span class="flex-1"></span><button class="btn btn-sm" @click="showLog=true">日志 ({{logLines}})</button></div>
 </div>
 </div>
+<div v-if="toast" class="fixed right-4 bottom-12 px-3 py-2 rounded-lg text-[12px] z-[60]" style="background:#238636;color:#fff;box-shadow:0 6px 16px rgba(0,0,0,.45)">{{toast}}</div>
 <div v-if="showLog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="showLog=false" style="backdrop-filter:blur(4px)">
-<div class="card w-[560px] max-h-[70vh] flex flex-col"><div class="flex items-center gap-2 mb-3"><h3 class="text-sm font-bold flex-1">日志</h3><button class="btn btn-sm" @click="logContent=''">清空</button></div><div class="log-area flex-1 p-3 h-[400px]">{{logContent||'暂无日志'}}</div><button class="btn mt-3" @click="showLog=false">关闭</button></div>
+<div class="card w-[560px] max-h-[70vh] flex flex-col"><div class="flex items-center gap-2 mb-3"><h3 class="text-sm font-bold flex-1">日志</h3><button class="btn btn-sm" @click="logContent=''">清空</button></div><div class="log-area flex-1 p-3 h-[400px]" ref="logBox">{{logContent||'暂无日志'}}</div><button class="btn mt-3" @click="showLog=false">关闭</button></div>
 </div>
 </div>
 <style>.card-actions{opacity:0;transition:opacity .15s}.card:hover .card-actions{opacity:1}
 .inspur-badge{background:rgba(88,166,255,.15);color:#58A6FF;border:1px solid rgba(88,166,255,.3)}.bmc-badge{background:rgba(63,185,80,.15);color:#3FB950;border:1px solid rgba(63,185,80,.3)}
 .resize-handle:hover{background:#30363D!important}.resize-handle:active{background:#58A6FF!important}</style>
 <script>
-const{createApp,ref,reactive,computed,onMounted}=Vue;
+const{createApp,ref,reactive,computed,onMounted,nextTick}=Vue;
 createApp({setup(){
 const tabs=[{id:"probe",label:"BMC 探测器",icon:"📡"},{id:"dhcp",label:"DHCP 服务器",icon:"🏠"},{id:"vlan",label:"网卡 VLAN",icon:"🏷️"},{id:"fru",label:"FRU / IPMI",icon:"🔧"},{id:"about",label:"关于",icon:"ℹ️"}];
 const currentView=ref("probe");
@@ -251,6 +253,14 @@ const fruFieldDefs=[
 const ipmiButtons=ref([]);
 const ipmiOutput=ref("");
 const logHeight=ref(120);
+const toast=ref("");let toastTimer=null;
+const logBox=ref(null),dhcpLogBox=ref(null),ipmiBox=ref(null);
+const ifaceBusy=ref(false);
+function showToast(m){toast.value=m;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){toast.value=""},1800)}
+function scrollLogs(){nextTick(function(){[logBox.value,dhcpLogBox.value,ipmiBox.value].forEach(function(el){if(el)el.scrollTop=el.scrollHeight})})}
+function appendLog(msg){var a=(logContent.value?logContent.value+"\n"+msg:msg).split("\n");logContent.value=a.length>500?a.slice(a.length-500).join("\n"):a.join("\n");logLines.value=logLines.value+1;scrollLogs()}
+function appendDHCPLog(m){var a=(dhcpLog.value?dhcpLog.value+"\n"+m:m).split("\n");dhcpLog.value=a.length>300?a.slice(a.length-300).join("\n"):a.join("\n");scrollLogs()}
+function setFRUFields(fields){Object.keys(fruFields).forEach(function(k){delete fruFields[k]});if(fields)Object.assign(fruFields,fields)}
 const probeMask=ref("255.255.255.0");
 const maskOptions=["255.255.255.0","255.255.254.0","255.255.255.128","255.255.255.192","255.255.255.224","255.255.255.240","255.255.255.248","255.255.255.252","255.255.0.0","255.0.0.0"];
 const vlanAdapters=ref([]),vlanIface=ref(""),vlanId=ref("0"),vlanRestart=ref(true),vlanBusy=ref(false),vlanOutput=ref("");
@@ -281,37 +291,38 @@ const currentIfaceName=computed(function(){var f=interfaces.value.find(function(
 const currentIfaceIP=computed(function(){var f=interfaces.value.find(function(i){return i.name===selectedIface.value});return f?f.ip||"-":"-"});
 function cardClass(idx,dev){var c=[];if(selectedRows.value.has(idx))c.push("selected");if(dev.isBmc){if(dev.vendor.includes("浪潮")||dev.vendor.includes("Inspur"))c.push("inspur");else c.push("bmc")}return c}
 async function call(m){var a=[];for(var i=1;i<arguments.length;i++)a.push(arguments[i]);if(!backend)return null;try{return await backend[m].apply(backend,a)}catch(e){console.error(e);return null}}
-async function refreshInterfaces(){var r=await call("GetInterfaces");if(r){interfaces.value=r;var cfg=await call("GetConfig");if(cfg&&cfg.DefaultIface){var found=r.find(function(i){return i.name===cfg.DefaultIface||i.netshName===cfg.DefaultIface});if(found)selectedIface.value=found.name}if(!selectedIface.value&&r.length)selectedIface.value=r[0].name}}
-async function setDefaultIface(){if(!selectedIface.value)return;await call("SetDefaultIface",selectedIface.value);alert("默认网卡已保存")}
-async function toggleSniff(){if(sniffing.value){await call("StopAll");sniffing.value=statusRunning.value=false;return}if(!selectedIface.value)return;var r=await call("StartSniff",selectedIface.value);if(r&&r.success===false){alert("监听失败: "+((r&&r.message)||"未知错误"));sniffing.value=statusRunning.value=false;return}sniffing.value=statusRunning.value=true;alert("监听已启动！请拔插一次网线或将BMC接入网络。")}
+async function refreshInterfaces(){ifaceBusy.value=true;try{var r=await call("GetInterfaces");if(r){interfaces.value=r;var cfg=await call("GetConfig");if(cfg&&cfg.DefaultIface){var found=r.find(function(i){return i.name===cfg.DefaultIface||i.netshName===cfg.DefaultIface});if(found)selectedIface.value=found.name}if(!selectedIface.value&&r.length)selectedIface.value=r[0].name}}finally{ifaceBusy.value=false}}
+async function setDefaultIface(){if(!selectedIface.value)return;await call("SetDefaultIface",selectedIface.value);showToast("默认网卡已保存")}
+async function toggleSniff(){if(sniffing.value){await call("StopAll");sniffing.value=statusRunning.value=false;return}if(!selectedIface.value)return;var r=await call("StartSniff",selectedIface.value);if(r&&r.success===false){alert("监听失败: "+((r&&r.message)||"未知错误"));sniffing.value=statusRunning.value=false;return}sniffing.value=statusRunning.value=true;showToast("监听已启动，等待设备广播…")}
 async function stopAll(){await call("StopAll");scanning.value=sniffing.value=statusRunning.value=false}
 async function autoConfigIP(){if(!selectedRows.value.size||!selectedIface.value)return;var d=devices.value[Array.from(selectedRows.value)[0]];var mask=(probeMask.value||"").trim()||"255.255.255.0";if(!isValidMask(mask)){alert("子网掩码无效: "+mask+"\n请填写形如 255.255.255.0 的连续掩码");return}var def=guessHostIP(d.ip,mask);var ip=prompt("配置本机IP（掩码 "+mask+"，BMC "+d.ip+"）:",def);if(!ip)return;if(!isValidIPv4(ip)){alert("IP 格式无效: "+ip);return}var r=await call("SetStaticIP",selectedIface.value,ip,mask,"");if(r&&r.success===false)alert("配置失败: "+((r&&r.message)||""));await refreshInterfaces()}
 function toggleRow(i,e){var s=new Set(selectedRows.value);if(e.ctrlKey||e.metaKey)s.has(i)?s.delete(i):s.add(i);else{s.clear();s.add(i)}selectedRows.value=s}
 function selectOnly(i){selectedRows.value=new Set([i])}
 function selectAll(){selectedRows.value=new Set(devices.value.map(function(_,i){return i}))}
-function openBrowser(i){var idx=i;if(idx===undefined&&selectedRows.value.size)idx=Array.from(selectedRows.value)[0];if(idx!==undefined)call("OpenURL","https://"+devices.value[idx].ip)}
-function copyIP(i){navigator.clipboard.writeText(devices.value[i].ip)}
+function clearDevices(){devices.value=[];selectedRows.value=new Set();showToast("设备列表已清空")}
+function openBrowser(i){var idx=i;if(idx===undefined&&selectedRows.value.size)idx=Array.from(selectedRows.value)[0];if(idx!==undefined)call("OpenURL","http://"+devices.value[idx].ip)}
+async function copyIP(i){var ip=devices.value[i].ip;try{await navigator.clipboard.writeText(ip)}catch(e){var ta=document.createElement("textarea");ta.value=ip;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();try{document.execCommand("copy")}catch(e2){}document.body.removeChild(ta)}showToast("已复制 "+ip)}
 function exportCSV(){if(!devices.value.length)return;var csv="﻿IP,MAC,\u5382\u5546,\u5907\u6CE8\n";devices.value.forEach(function(d){csv+=d.ip+","+d.mac+","+d.vendor+","+(d.isBmc?"BMC":"")+"\n"});var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="oobkit_"+new Date().toISOString().slice(0,10)+".csv";a.click()}
-async function setGatewayIP(){if(!selectedIface.value)return;var p=dhcp.startIP.split(".");var ip=p[0]+"."+p[1]+"."+p[2]+".1";await call("SetStaticIP",selectedIface.value,ip,dhcp.mask,"");await refreshInterfaces();dhcp.customIP=ip}
+async function setGatewayIP(){if(!selectedIface.value){alert("请先选择网卡");return}if(!isValidIPv4(dhcp.startIP)){alert("起始 IP 格式无效: "+dhcp.startIP);return}if(!isValidMask(dhcp.mask)){alert("子网掩码无效: "+dhcp.mask);return}var p=dhcp.startIP.split(".");var ip=p[0]+"."+p[1]+"."+p[2]+".1";if(!confirm("将本机 IP 设为 "+ip+"/"+dhcp.mask+" ？\n会修改网卡配置，可能短暂断网。"))return;var r=await call("SetStaticIP",selectedIface.value,ip,dhcp.mask,"");if(r&&r.success===false)alert("配置失败: "+((r&&r.message)||""));await refreshInterfaces();dhcp.customIP=ip;showToast("本机 IP 已设为 "+ip)}
 async function setCustomIP(){if(!selectedIface.value||!dhcp.customIP)return;var mask=(dhcp.customMask||"").trim()||dhcp.mask;if(!isValidIPv4(dhcp.customIP)){alert("IP 格式无效: "+dhcp.customIP);return}if(!isValidMask(mask)){alert("子网掩码无效: "+mask+"\n请填写形如 255.255.255.0 的连续掩码");return}if(!sameSubnet(dhcp.customIP,dhcp.startIP,mask)){if(!confirm("本机 IP "+dhcp.customIP+"/"+mask+" 与地址池起始 "+dhcp.startIP+" 不在同一网段，DHCP 租约可能不通。\n仍然继续？"))return}else if(ipToInt(dhcp.customIP)>=ipToInt(dhcp.startIP)&&ipToInt(dhcp.customIP)<=ipToInt(dhcp.endIP)){if(!confirm("本机 IP "+dhcp.customIP+" 落在 DHCP 地址池 "+dhcp.startIP+"~"+dhcp.endIP+" 内，可能与租约冲突。\n仍然继续？"))return}var r=await call("SetStaticIP",selectedIface.value,dhcp.customIP,mask,"");if(r&&r.success===false)alert("配置失败: "+((r&&r.message)||""));await refreshInterfaces()}
 function validatePool(){if(!isValidIPv4(dhcp.startIP))return "起始 IP 格式无效: "+dhcp.startIP;if(!isValidIPv4(dhcp.endIP))return "结束 IP 格式无效: "+dhcp.endIP;if(!isValidMask(dhcp.mask))return "子网掩码无效: "+dhcp.mask;if(ipToInt(dhcp.startIP)>ipToInt(dhcp.endIP))return "起始 IP 不能大于结束 IP";if(!sameSubnet(dhcp.startIP,dhcp.endIP,dhcp.mask))return "起始与结束 IP 不在同一网段（掩码 "+dhcp.mask+"）";if(dhcp.gateway&&!isValidIPv4(dhcp.gateway))return "网关格式无效: "+dhcp.gateway;return ""}
 async function startDHCP(){if(!selectedIface.value){alert("请先在探测器中选择网卡");return}var err=validatePool();if(err){alert(err);return}var r=await call("StartDHCPServer",selectedIface.value,dhcp.startIP,dhcp.endIP,dhcp.mask,dhcp.gateway);if(r&&r.success){dhcpRunning.value=true;dhcpServerInfo.value=r.message||"";appendDHCPLog("✔ "+(r.message||"DHCP 已启动"));refreshDHCPLeases();leaseTimer=setInterval(refreshDHCPLeases,3000)}else{dhcpRunning.value=false;dhcpServerInfo.value="";alert((r&&r.message)||"启动失败")}}
 async function stopDHCP(){await call("StopDHCPServer");dhcpRunning.value=false;dhcpServerInfo.value="";dhcpLeases.value=[];if(leaseTimer){clearInterval(leaseTimer);leaseTimer=null}}
 async function refreshDHCPLeases(){var r=await call("GetDHCPLeases");if(r)dhcpLeases.value=r}
-function appendDHCPLog(m){dhcpLog.value=(dhcpLog.value?dhcpLog.value+"\n":"")+m}
+
 async function refreshDHCPStatus(){var r=await call("GetDHCPStatus");if(r&&r.running){dhcpRunning.value=true;dhcpServerInfo.value="服务端 "+r.serverIp+" · 池 "+r.pool;refreshDHCPLeases();if(!leaseTimer)leaseTimer=setInterval(refreshDHCPLeases,3000)}else{dhcpRunning.value=false;dhcpServerInfo.value=""}}
-async function exportFRU(){var r=await call("ExportFRU",fru.host,fru.user,fru.pass);if(r&&r.success){Object.assign(fruFields,r.fields);ipmiOutput.value="FRU 导出成功"}else alert((r&&r.message)||"导出失败")}
+async function exportFRU(){var r=await call("ExportFRU",fru.host,fru.user,fru.pass);if(r&&r.success){setFRUFields(r.fields);ipmiOutput.value="FRU 导出成功";showToast("FRU 导出成功")}else alert((r&&r.message)||"导出失败")}
 async function saveFRUFile(){var sn=(fruFields["Product_SerialNumber"]||fruFields["Product_Serial"]||fruFields["Board_SerialNumber"]||"FRU").replace(/[\\/:*?\"<>|]/g,"_");var r=await call("SaveFRUFile",sn);if(r&&r.success)ipmiOutput.value="已保存: "+r.file;else alert((r&&r.message)||"保存失败")}
-async function importFRU(){if(!confirm("将修改后的字段写回BMC？"))return;var fields=JSON.parse(JSON.stringify(fruFields));var file=fruFields._file||"";var r=await call("ImportFRU",fru.host,fru.user,fru.pass,file,fields);if(r&&r.success)ipmiOutput.value="FRU 导入成功";else alert((r&&r.message)||"导入失败")}
-async function openFRUFile(){var r=await call("OpenFileDialog");if(r&&r.path){var fr=await call("OpenFRUFile",r.path);if(fr&&fr.success){Object.assign(fruFields,fr.fields);fruFields._file=fr.file;ipmiOutput.value="已打开: "+r.path}}}
-async function runIPMI(cmd){ipmiOutput.value="> "+cmd+"\n执行中...";var r=await call("ExecuteIPMI",fru.host,fru.user,fru.pass,cmd);ipmiOutput.value="> "+cmd+"\n"+(r&&r.output||r&&r.message||"无输出")}
+async function importFRU(){if(!fru.host){alert("请先填写 IPMI IP");return}if(!confirm("将修改后的字段写回 BMC "+fru.host+" ？\n这会覆盖该机的 FRU 信息。"))return;var fields=JSON.parse(JSON.stringify(fruFields));var file=fruFields._file||"";var r=await call("ImportFRU",fru.host,fru.user,fru.pass,file,fields);if(r&&r.success)ipmiOutput.value="FRU 导入成功";else alert((r&&r.message)||"导入失败")}
+async function openFRUFile(){var r=await call("OpenFileDialog");if(r&&r.path){var fr=await call("OpenFRUFile",r.path);if(fr&&fr.success){setFRUFields(fr.fields);fruFields._file=fr.file;ipmiOutput.value="已打开: "+r.path;showToast("已打开 "+r.path.split("\\").pop())}else alert((fr&&fr.message)||"打开失败")}}
+async function runIPMI(cmd){ipmiOutput.value="> "+cmd+"\n执行中...";var r=await call("ExecuteIPMI",fru.host,fru.user,fru.pass,cmd);ipmiOutput.value="> "+cmd+"\n"+(r&&r.output||r&&r.message||"无输出");scrollLogs()}
 async function addIPMIButton(){var label=prompt("按钮名称:"),cmd=prompt("IPMI命令(如fru list):");if(label&&cmd){ipmiButtons.value.push({label:label,command:cmd});await call("SaveIPMIButtons",JSON.parse(JSON.stringify(ipmiButtons.value)))}}
 async function removeIPMIButton(i){ipmiButtons.value.splice(i,1);await call("SaveIPMIButtons",JSON.parse(JSON.stringify(ipmiButtons.value)))}
 async function checkNpcap(){var r=await call("CheckNpcap");if(!r||r.installed)return;if(confirm("未检测到 Npcap，BMC 探测功能需要它。\n\n将打开 Npcap 官网，请自行下载安装。\n（个人使用免费，商业用途需购买许可）")){await call("OpenNpcapWebsite")}}
 function openGitHub(){call("OpenURL","https://github.com/cxrmy/OOBKit")}
-function setupEvents(){var on=(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.EventsOn)||(window.runtime&&window.runtime.EventsOn);if(!on)return;on("device-found",function(d){if(!devices.value.some(function(x){return x.ip===d.ip&&x.mac===d.mac}))devices.value.push(d)});on("scan-complete",function(){scanning.value=statusRunning.value=false});on("scan-error",function(m){scanning.value=statusRunning.value=false;alert("错误: "+m)});on("sniff-error",function(m){sniffing.value=statusRunning.value=false;alert("监听错误: "+m)});on("sniff-complete",function(){sniffing.value=statusRunning.value=false});on("log",function(msg){logContent.value=(logContent.value?logContent.value+"\n":"")+msg;logLines.value=logLines.value+1});on("dhcp-log",function(msg){dhcpLog.value=(dhcpLog.value?dhcpLog.value+"\n":"")+msg})}
+function setupEvents(){var on=(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.EventsOn)||(window.runtime&&window.runtime.EventsOn);if(!on)return;on("device-found",function(d){if(!devices.value.some(function(x){return x.ip===d.ip&&x.mac===d.mac}))devices.value.push(d)});on("scan-complete",function(){scanning.value=statusRunning.value=false});on("scan-error",function(m){scanning.value=statusRunning.value=false;alert("错误: "+m)});on("sniff-error",function(m){sniffing.value=statusRunning.value=false;alert("监听错误: "+m)});on("sniff-complete",function(){sniffing.value=statusRunning.value=false});on("log",function(msg){appendLog(msg)});on("dhcp-log",function(msg){appendDHCPLog(msg)})}
 onMounted(async function(){setupEvents();await refreshInterfaces();refreshDHCPStatus();document.addEventListener("keydown",function(e){if(e.key==="Escape")selectedRows.value=new Set()});var cfg=await call("GetConfig");if(cfg&&cfg.IPMIButtons&&cfg.IPMIButtons.length)ipmiButtons.value=cfg.IPMIButtons;checkNpcap()});
-return{tabs:tabs,currentView:currentView,interfaces:interfaces,selectedIface:selectedIface,devices:devices,scanning:scanning,sniffing:sniffing,statusRunning:statusRunning,selectedRows:selectedRows,showLog:showLog,logContent:logContent,logLines:logLines,bmcCount:bmcCount,fruHasFields:fruHasFields,fruFieldDefs:fruFieldDefs,currentIfaceName:currentIfaceName,currentIfaceIP:currentIfaceIP,dhcp:dhcp,dhcpRunning:dhcpRunning,dhcpLog:dhcpLog,dhcpLeases:dhcpLeases,dhcpServerInfo:dhcpServerInfo,refreshDHCPLeases:refreshDHCPLeases,refreshDHCPStatus:refreshDHCPStatus,fru:fru,fruFields:fruFields,ipmiButtons:ipmiButtons,ipmiOutput:ipmiOutput,logHeight:logHeight,startResize:startResize,winMin:winMin,winMax:winMax,winClose:winClose,openGitHub:openGitHub,cardClass:cardClass,refreshInterfaces:refreshInterfaces,switchTab:switchTab,probeMask:probeMask,maskOptions:maskOptions,vlanAdapters:vlanAdapters,vlanIface:vlanIface,vlanId:vlanId,vlanRestart:vlanRestart,vlanBusy:vlanBusy,vlanOutput:vlanOutput,vlanCurrent:vlanCurrent,vlanSupportedCount:vlanSupportedCount,refreshVLAN:refreshVLAN,syncVLANFromIface:syncVLANFromIface,pickVLAN:pickVLAN,applyVLAN:applyVLAN,clearVLAN:clearVLAN,setDefaultIface:setDefaultIface,toggleSniff:toggleSniff,stopAll:stopAll,autoConfigIP:autoConfigIP,toggleRow:toggleRow,selectOnly:selectOnly,selectAll:selectAll,openBrowser:openBrowser,copyIP:copyIP,exportCSV:exportCSV,setGatewayIP:setGatewayIP,setCustomIP:setCustomIP,startDHCP:startDHCP,stopDHCP:stopDHCP,exportFRU:exportFRU,saveFRUFile:saveFRUFile,importFRU:importFRU,openFRUFile:openFRUFile,runIPMI:runIPMI,addIPMIButton:addIPMIButton,removeIPMIButton:removeIPMIButton}
+return{tabs:tabs,toast:toast,logBox:logBox,dhcpLogBox:dhcpLogBox,ipmiBox:ipmiBox,clearDevices:clearDevices,ifaceBusy:ifaceBusy,currentView:currentView,interfaces:interfaces,selectedIface:selectedIface,devices:devices,scanning:scanning,sniffing:sniffing,statusRunning:statusRunning,selectedRows:selectedRows,showLog:showLog,logContent:logContent,logLines:logLines,bmcCount:bmcCount,fruHasFields:fruHasFields,fruFieldDefs:fruFieldDefs,currentIfaceName:currentIfaceName,currentIfaceIP:currentIfaceIP,dhcp:dhcp,dhcpRunning:dhcpRunning,dhcpLog:dhcpLog,dhcpLeases:dhcpLeases,dhcpServerInfo:dhcpServerInfo,refreshDHCPLeases:refreshDHCPLeases,refreshDHCPStatus:refreshDHCPStatus,fru:fru,fruFields:fruFields,ipmiButtons:ipmiButtons,ipmiOutput:ipmiOutput,logHeight:logHeight,startResize:startResize,winMin:winMin,winMax:winMax,winClose:winClose,openGitHub:openGitHub,cardClass:cardClass,refreshInterfaces:refreshInterfaces,switchTab:switchTab,probeMask:probeMask,maskOptions:maskOptions,vlanAdapters:vlanAdapters,vlanIface:vlanIface,vlanId:vlanId,vlanRestart:vlanRestart,vlanBusy:vlanBusy,vlanOutput:vlanOutput,vlanCurrent:vlanCurrent,vlanSupportedCount:vlanSupportedCount,refreshVLAN:refreshVLAN,syncVLANFromIface:syncVLANFromIface,pickVLAN:pickVLAN,applyVLAN:applyVLAN,clearVLAN:clearVLAN,setDefaultIface:setDefaultIface,toggleSniff:toggleSniff,stopAll:stopAll,autoConfigIP:autoConfigIP,toggleRow:toggleRow,selectOnly:selectOnly,selectAll:selectAll,openBrowser:openBrowser,copyIP:copyIP,exportCSV:exportCSV,setGatewayIP:setGatewayIP,setCustomIP:setCustomIP,startDHCP:startDHCP,stopDHCP:stopDHCP,exportFRU:exportFRU,saveFRUFile:saveFRUFile,importFRU:importFRU,openFRUFile:openFRUFile,runIPMI:runIPMI,addIPMIButton:addIPMIButton,removeIPMIButton:removeIPMIButton}
 }}).mount("#app");
 </script>
 </body>
