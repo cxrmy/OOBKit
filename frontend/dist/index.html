@@ -98,11 +98,10 @@ input,select,textarea{-webkit-app-region:no-drag;--wails-draggable:no-drag}
 <div><label class="text-[#8B949E]">网关</label><input v-model="dhcp.gateway"></div>
 <div class="flex items-end"><button class="btn btn-sm" @click="setGatewayIP">初始化</button></div>
 </div>
-<div class="flex gap-2 flex-shrink-0">
-<input v-model="dhcp.customIP" placeholder="自定义本机 IP" class="max-w-[150px] text-[14px] font-mono">
-<span class="text-[11px] text-[#8B949E] whitespace-nowrap">掩码</span>
-<input v-model="dhcp.customMask" placeholder="255.255.255.0" class="max-w-[140px] text-[14px] font-mono" title="自定义本机 IP 的掩码，留空则沿用 DHCP 子网掩码">
-<button class="btn btn-blue btn-sm" @click="setCustomIP">更改</button>
+<div class="flex items-end gap-3 flex-shrink-0 text-[14px]">
+<div><label class="block text-[#8B949E]">自定义本机 IP</label><input v-model="dhcp.customIP" placeholder="例如 192.168.1.1" class="font-mono" style="width:170px"></div>
+<div><label class="block text-[#8B949E]">掩码</label><input v-model="dhcp.customMask" placeholder="留空沿用 DHCP 掩码" class="font-mono" style="width:200px" title="留空则沿用上方的 DHCP 子网掩码"></div>
+<button class="btn btn-blue btn-sm" style="margin-bottom:2px" @click="setCustomIP">更改</button>
 <span class="flex-1"></span>
 <span v-if="dhcpRunning" class="text-[12px] self-center" style="color:#3FB950">● {{dhcpServerInfo}}</span>
 <button v-if="!dhcpRunning" class="btn btn-green" @click="startDHCP">启动 DHCP</button>
