@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-18
+
 ### 新增
 
 - 网卡 VLAN：新增「网卡 VLAN」页，自动识别驱动暴露的 VLAN ID 关键字（VlanID / RegVlanid 等），
