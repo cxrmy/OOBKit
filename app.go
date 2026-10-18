@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
@@ -137,12 +138,24 @@ type InterfaceInfo struct {
 
 type App struct {
 	ctx        context.Context
+	mu         sync.Mutex // 保护 stopCh
 	stopCh     chan struct{}
 	dhcpServer *DHCPServer
 }
 
 func NewApp() *App {
 	return &App{stopCh: make(chan struct{})}
+}
+
+// currentStop 返回当前的停止通道。StopAll 会换一个新通道，
+// 所以扫描/监听 goroutine 必须在启动时取一次并一直用它。
+func (a *App) currentStop() chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopCh == nil {
+		a.stopCh = make(chan struct{})
+	}
+	return a.stopCh
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -187,7 +200,7 @@ func (a *App) OpenFileDialog() map[string]interface{} {
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	close(a.stopCh)
+	a.StopAll()
 }
 
 // ─── OUI 查询 ─────────────────────────────────────────────────────
@@ -227,6 +240,15 @@ func (a *App) GetInterfaces() []InterfaceInfo {
 		log.Printf("pcap.FindAllDevs 失败: %v", err)
 		a.emitLog("获取网卡列表失败: " + err.Error())
 		return nil
+	}
+
+	// 网卡热插拔（USB 网卡/扩展坞）后 GUID 映射会过期，
+	// 发现缓存里没有的设备就重建一次，否则配网会报「找不到网卡的系统名称」
+	for _, dev := range devs {
+		if guid := extractGUIDFromPcapName(dev.Name); guid != "" && findAdapByGUID(guid) == nil {
+			refreshAdapCache()
+			break
+		}
 	}
 
 	ipconfigMap := getWindowsIPConfig()
@@ -338,32 +360,34 @@ func getWindowsIPConfig() map[string]string {
 
 // ─── ARP 主动扫描 ─────────────────────────────────────────────────
 
-func (a *App) StartScan(ifaceName string, subnet string) {
-	a.emitLog("开始扫描 " + subnet + " ...")
+func (a *App) StartScan(ifaceName string, subnet string) map[string]interface{} {
+	handle, err := pcap.OpenLive(ifaceName, 65536, true, pcap.BlockForever)
+	if err != nil {
+		log.Printf("打开网卡失败: %v", err)
+		a.emitLog("扫描失败: " + err.Error())
+		return map[string]interface{}{"success": false, "message": "打开网卡失败: " + err.Error()}
+	}
+
+	stop := a.currentStop()
 	myMAC := getIfaceMACStr(ifaceName)
+	a.emitLog("开始扫描 " + subnet + " ...")
+
 	go func() {
+		defer handle.Close()
 		defer func() {
 			runtime.EventsEmit(a.ctx, "scan-complete")
 			a.emitLog("扫描完成")
 		}()
 
-		handle, err := pcap.OpenLive(ifaceName, 65536, true, pcap.BlockForever)
-		if err != nil {
-			log.Printf("打开网卡失败: %v", err)
-			runtime.EventsEmit(a.ctx, "scan-error", "打开网卡失败: "+err.Error())
-			return
-		}
-		defer handle.Close()
-
-		// 构造 ARP 请求（逐个 IP）
+		src := gopacket.NewPacketSource(handle, handle.LinkType())
 		ips := expandSubnet(subnet)
 		for i, ip := range ips {
 			select {
-			case <-a.stopCh:
+			case <-stop:
 				return
 			default:
 			}
-			mac := arpPing(handle, ifaceName, ip)
+			mac := arpPing(handle, src, ifaceName, ip)
 			if mac != "" && mac != myMAC {
 				vendor, isBMC := lookupOUI(mac)
 				dev := DeviceInfo{IP: ip, MAC: mac, Vendor: vendor, IsBMC: isBMC}
@@ -372,7 +396,6 @@ func (a *App) StartScan(ifaceName string, subnet string) {
 					a.emitLog("发现 BMC: " + ip + " | " + mac + " | " + vendor)
 				}
 			}
-			// 进度
 			if i%50 == 0 || i == len(ips)-1 {
 				runtime.EventsEmit(a.ctx, "scan-progress", map[string]int{
 					"current": i + 1, "total": len(ips),
@@ -381,9 +404,13 @@ func (a *App) StartScan(ifaceName string, subnet string) {
 			time.Sleep(2 * time.Millisecond)
 		}
 	}()
+
+	return map[string]interface{}{"success": true, "message": "扫描已开始"}
 }
 
-func arpPing(handle *pcap.Handle, iface string, targetIP string) string {
+// arpPing 发一个 ARP 请求并等待应答。src 由调用方复用，
+// 避免每个 IP 都新建 PacketSource（那会泄漏抓包 goroutine）。
+func arpPing(handle *pcap.Handle, src *gopacket.PacketSource, iface string, targetIP string) string {
 	eth := &layers.Ethernet{
 		SrcMAC:       getIfaceMAC(iface),
 		DstMAC:       []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
@@ -403,18 +430,22 @@ func arpPing(handle *pcap.Handle, iface string, targetIP string) string {
 
 	buf := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	gopacket.SerializeLayers(buf, opts, eth, arp)
+	if err := gopacket.SerializeLayers(buf, opts, eth, arp); err != nil {
+		return ""
+	}
+	if err := handle.WritePacketData(buf.Bytes()); err != nil {
+		return ""
+	}
 
-	handle.WritePacketData(buf.Bytes())
-
-	// 等待响应
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	timeout := time.After(200 * time.Millisecond)
 	for {
 		select {
 		case <-timeout:
 			return ""
-		case packet := <-packetSource.Packets():
+		case packet, ok := <-src.Packets():
+			if !ok || packet == nil {
+				return ""
+			}
 			if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
 				arpResp := arpLayer.(*layers.ARP)
 				if arpResp.Operation == layers.ARPReply &&
@@ -428,44 +459,58 @@ func arpPing(handle *pcap.Handle, iface string, targetIP string) string {
 
 // ─── 被动监听 ─────────────────────────────────────────────────────
 
-func (a *App) StartSniff(ifaceName string) {
-	a.emitLog("开始被动监听 " + ifaceName + " ...")
-	myMAC := getIfaceMACStr(ifaceName) // 本机 MAC，用于过滤
-	go func() {
-		handle, err := pcap.OpenLive(ifaceName, 65536, true, pcap.BlockForever)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "sniff-error", "打开网卡失败: "+err.Error())
-			a.emitLog("监听失败: " + err.Error())
-			return
-		}
-		defer handle.Close()
+func (a *App) StartSniff(ifaceName string) map[string]interface{} {
+	handle, err := pcap.OpenLive(ifaceName, 65536, true, pcap.BlockForever)
+	if err != nil {
+		a.emitLog("监听失败: " + err.Error())
+		return map[string]interface{}{"success": false, "message": "打开网卡失败: " + err.Error()}
+	}
 
+	myMAC := getIfaceMACStr(ifaceName) // 本机 MAC，用于过滤
+	stop := a.currentStop()
+	a.emitLog("开始被动监听 " + ifaceName + " ...")
+
+	go func() {
+		defer handle.Close()
 		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 		for {
 			select {
-			case <-a.stopCh:
+			case <-stop:
 				runtime.EventsEmit(a.ctx, "sniff-complete")
 				a.emitLog("监听已停止")
 				return
-			case packet := <-packetSource.Packets():
+			case packet, ok := <-packetSource.Packets():
+				// 通道关闭（网卡被禁用/拔出/pcap 出错）时 ok=false，
+				// 必须退出，否则会一直拿到 nil 包并把进程打崩
+				if !ok || packet == nil {
+					runtime.EventsEmit(a.ctx, "sniff-complete")
+					a.emitLog("监听已结束（网卡不可用）")
+					return
+				}
 				// 被动识别：ARP（免费ARP/请求应答）+ mDNS（BMC 周期通告）
 				// + DHCP + LLDP —— 零主动流量，详见 sniff_parse.go
 				a.parseSniffPacket(packet, myMAC)
 			}
 		}
 	}()
+
+	return map[string]interface{}{"success": true, "message": "监听已启动"}
 }
 
+// StopAll 停止所有正在进行的扫描/监听。
+// 关闭 channel 是广播，所有在跑的 goroutine 都能收到（原来的实现只往通道里塞一个值，
+// 同时开扫描和监听时只能停掉其中一个，而且会把 a.stopCh 换掉导致另一个永远停不下来）。
 func (a *App) StopAll() {
-	select {
-	case a.stopCh <- struct{}{}:
-	default:
-	}
-	// 重建 channel
+	a.mu.Lock()
+	ch := a.stopCh
 	a.stopCh = make(chan struct{})
+	a.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
 }
 
-// ─── Npcap 检测与安装 ─────────────────────────────────────────────
+// ─── Npcap 检测与安装 ───────────────────────────────────────────── 检测与安装 ─────────────────────────────────────────────
 
 func (a *App) CheckNpcap() map[string]interface{} {
 	paths := []string{
@@ -571,10 +616,9 @@ func (a *App) SetDHCP(iface string) map[string]interface{} {
 	}
 
 	// 删除静态 IP 配置 + 启用 DHCP（和 Windows GUI 行为一致）
-	psScript := fmt.Sprintf(
-		"Remove-NetIPAddress -InterfaceAlias '%s' -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue; "+
-			"Set-NetIPInterface -InterfaceAlias '%s' -Dhcp Enabled",
-		netshName, netshName)
+	alias := psQuote(netshName)
+	psScript := "Remove-NetIPAddress -InterfaceAlias " + alias + " -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue; " +
+		"Set-NetIPInterface -InterfaceAlias " + alias + " -Dhcp Enabled"
 	a.emitLog("恢复DHCP: " + netshName)
 	encoded := encodePowerShellCmd(psScript)
 	out, err := execPowerShellHidden(encoded)

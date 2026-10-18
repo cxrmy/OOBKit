@@ -1,6 +1,6 @@
 # OOBKit — 带外管理工具
 
-> BMC 探测发现 · DHCP 服务器 · FRU 读写 · IPMI 快捷命令，一体化带外运维工具箱
+> BMC 探测发现 · DHCP 服务器 · 网卡 VLAN · FRU 读写 · IPMI 快捷命令，一体化带外运维工具箱
 
 基于 **Go + Wails v2 + Vue 3** 的 Windows 桌面应用。
 
@@ -10,6 +10,7 @@
 | ---- | ---- |
 | BMC 探测器 | 跨网段扫描局域网内的 BMC，支持一键配网 |
 | DHCP 服务器 | 内置轻量 DHCP 服务，给无 IP 的 BMC 分配地址，租约表格实时显示 |
+| 网卡 VLAN | 读取网卡驱动的 VLAN 高级属性（或注册表 VlanID），设置/清除 802.1Q 标签，可选应用后重启网卡 |
 | FRU / IPMI | FRU 信息导出/导入/保存，支持 IPMI 命令快捷执行（sel、mc、chassis、lan、fru、sensor 等 30+ 命令别名，以及 raw 十六进制） |
 | 关于 | 版本信息与作者信息 |
 
@@ -30,17 +31,15 @@
    go install github.com/wailsapp/wails/v2/cmd/wails@latest
    ```
 
-3. CGO 环境（GCC）：
-
-   ```bash
-   choco install mingw
-   ```
+3. 无需 CGO/GCC：gopacket 的 pcap 在 Windows 上通过 `syscall` 动态加载 `wpcap.dll`，
+   `CGO_ENABLED=0` 即可编译（抓包仍需用户安装 Npcap）。
 
 ### 编译
 
 ```bash
 go mod tidy
-wails build
+$env:CGO_ENABLED='0'
+wails build -platform windows/amd64
 ```
 
 产物在 `build/bin/OOBKit.exe`。
@@ -76,6 +75,7 @@ wails dev
 ├── app.go                   # 后端 API（探测/配网/DHCP/Npcap 检测）
 ├── fru.go                   # FRU 读写 + IPMI 命令执行
 ├── dhcp.go                  # DHCP 服务器
+├── vlan.go                  # 网卡 VLAN ID（驱动高级属性 / 注册表）
 ├── dhcp_conn_windows.go     # DHCP UDP socket（Windows）
 ├── exec_hide_windows.go     # 隐藏 shell 命令窗口（Windows）
 ├── build/

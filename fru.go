@@ -36,39 +36,16 @@ func (a *App) ExportFRU(host, user, pass string) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "message": "连接失败: " + err.Error()}
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
 	if err := c.Connect(ctx); err != nil {
 		return map[string]interface{}{"success": false, "message": "IPMI 连接失败: " + err.Error()}
 	}
 	defer c.Close(ctx)
 
-	info, err := c.GetFRUInventoryAreaInfo(ctx, 0)
-	if err != nil || info.AreaSizeBytes < 1 {
-		return map[string]interface{}{"success": false, "message": "FRU 信息获取失败"}
-	}
-	totalBytes := int(info.AreaSizeBytes)
-	if totalBytes > 8192 {
-		totalBytes = (totalBytes + 1) * 8
-	}
-
-	var data []byte
-	for off := 0; off < totalBytes; {
-		count := uint8(32)
-		if totalBytes-off < int(count) {
-			count = uint8(totalBytes - off)
-		}
-		r, err := c.ReadFRUData(ctx, 0, uint16(off), count)
-		if err != nil || r == nil || len(r.Data) == 0 {
-			break
-		}
-		data = append(data, r.Data...)
-		off += int(r.CountReturned)
-		if r.CountReturned < count {
-			break
-		}
-	}
-	if len(data) == 0 {
-		return map[string]interface{}{"success": false, "message": "FRU 数据为空"}
+	data, err := readFRUArea(ctx, c, 0)
+	if err != nil {
+		return map[string]interface{}{"success": false, "message": err.Error()}
 	}
 
 	lastFRUData = data
@@ -177,7 +154,8 @@ func (a *App) ImportFRU(host, user, pass, file string, fields map[string]string)
 	if err != nil {
 		return map[string]interface{}{"success": false, "message": "连接失败: " + err.Error()}
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
 	if err := c.Connect(ctx); err != nil {
 		return map[string]interface{}{"success": false, "message": "连接失败: " + err.Error()}
 	}
@@ -194,10 +172,13 @@ func (a *App) ImportFRU(host, user, pass, file string, fields map[string]string)
 	}
 	// 获取 BMC 上的 FRU 大小，确保数据完整
 	info, err := c.GetFRUInventoryAreaInfo(ctx, 0)
-	if err == nil && info.AreaSizeBytes > 0 {
+	if err == nil && info != nil && info.AreaSizeBytes > 0 {
 		bufSize := int(info.AreaSizeBytes)
-		if bufSize > 8192 {
-			bufSize = (bufSize + 1) * 8
+		if bufSize > 8192 && bufSize*8 <= 65535 {
+			bufSize *= 8
+		}
+		if bufSize > 65535 {
+			bufSize = 65535
 		}
 		if len(src) < bufSize {
 			// 补零到完整大小
@@ -295,9 +276,10 @@ func (a *App) ExecuteIPMI(host, user, pass, command string) map[string]interface
 	if err != nil {
 		return map[string]interface{}{"success": false, "message": "连接失败"}
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	if err := c.Connect(ctx); err != nil {
-		return map[string]interface{}{"success": false, "message": "连接失败"}
+		return map[string]interface{}{"success": false, "message": "连接失败: " + err.Error()}
 	}
 	defer c.Close(ctx)
 
@@ -666,15 +648,28 @@ func bytesToStr(b []byte) string {
 
 // readFRUFull 读取 deviceID=0 的完整 FRU 数据
 func readFRUFull(ctx context.Context, c *ipmi.Client) ([]byte, error) {
-	info, err := c.GetFRUInventoryAreaInfo(ctx, 0)
-	if err != nil || info.AreaSizeBytes < 1 {
-		return nil, fmt.Errorf("FRU info failed")
+	return readFRUArea(ctx, c, 0)
+}
+
+// readFRUArea 读取整块 FRU 数据。
+//
+// 注意两点（原实现会在这里出错）：
+//   - AreaSizeBytes 已经是字节数；个别 BMC 返回的是 (n+1)*8 编码值，
+//     只有展开后仍不超过 65535 才展开，否则 IPMI 的 uint16 偏移会回绕，
+//     变成从头重复读取甚至死循环；
+//   - CountReturned 才是有效字节数，Data 可能被 BMC 补齐，按 CountReturned 截断。
+func readFRUArea(ctx context.Context, c *ipmi.Client, deviceID uint8) ([]byte, error) {
+	info, err := c.GetFRUInventoryAreaInfo(ctx, deviceID)
+	if err != nil || info == nil || info.AreaSizeBytes < 1 {
+		return nil, fmt.Errorf("FRU 信息获取失败")
 	}
-	// 有的 BMC 返回编码值 (total=(x+1)*8)，有的返回实际字节数
-	// 统一按实际字节数读取：先尝试 raw 值，超过 8192 则按编码值处理
+
 	totalBytes := int(info.AreaSizeBytes)
-	if totalBytes > 8192 {
-		totalBytes = (totalBytes + 1) * 8
+	if totalBytes > 8192 && totalBytes*8 <= 65535 {
+		totalBytes *= 8
+	}
+	if totalBytes > 65535 {
+		totalBytes = 65535
 	}
 
 	var data []byte
@@ -683,15 +678,22 @@ func readFRUFull(ctx context.Context, c *ipmi.Client) ([]byte, error) {
 		if totalBytes-off < int(count) {
 			count = uint8(totalBytes - off)
 		}
-		r, err := c.ReadFRUData(ctx, 0, uint16(off), count)
-		if err != nil || r == nil || len(r.Data) == 0 {
+		r, err := c.ReadFRUData(ctx, deviceID, uint16(off), count)
+		if err != nil || r == nil || len(r.Data) == 0 || r.CountReturned == 0 {
 			break
 		}
-		data = append(data, r.Data...)
-		off += int(r.CountReturned)
-		if r.CountReturned < count {
+		n := int(r.CountReturned)
+		if n > len(r.Data) {
+			n = len(r.Data)
+		}
+		data = append(data, r.Data[:n]...)
+		off += n
+		if int(r.CountReturned) < int(count) {
 			break
 		}
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("FRU 数据为空")
 	}
 	return data, nil
 }
@@ -819,6 +821,9 @@ func parseByte(s string) byte {
 
 // fruChecksum 计算 FRU 校验和（两's complement 加和）
 func fruChecksum(data []byte, length int) byte {
+	if length > len(data) {
+		length = len(data)
+	}
 	var sum int
 	for i := 0; i < length; i++ {
 		sum += int(data[i])
@@ -841,27 +846,32 @@ func applyFRUFields(src []byte, fields map[string]string, logFn func(string)) []
 	if off := int(hdr.ChassisOffset8B) * 8; off > 0 && off+3 < len(src) {
 		areaLen := int(src[off+1]) * 8
 		end := off + areaLen
-		if end > len(src) {
-			end = len(src)
+		if areaLen < 8 || end > len(src) {
+			logFn("Chassis 区域长度异常（数据可能不完整），已跳过")
+			areaLen = 0
 		}
 		// Chassis_Type 固定位置 (byte 2)，非 TLV
-		if v, ok := fields["Chassis_Type"]; ok {
-			n := parseByte(v)
-			if n > 0 && dst[off+2] != n {
-				dst[off+2] = n
-				modified = true
-				logFn(fmt.Sprintf("Chassis_Type -> 0x%02x", n))
+		if areaLen == 0 {
+			// 区域不完整，跳过本区
+		} else {
+			if v, ok := fields["Chassis_Type"]; ok {
+				n := parseByte(v)
+				if n > 0 && dst[off+2] != n {
+					dst[off+2] = n
+					modified = true
+					logFn(fmt.Sprintf("Chassis_Type -> 0x%02x", n))
+				}
 			}
-		}
-		p := dst[off+3 : end-1]
-		tlvMod := modifyTLV(p, fields, "Chassis_", []string{"PartNumber", "SerialNumber"}, logFn)
-		if tlvMod {
-			dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
-			modified = true
-		} else if _, ok := fields["Chassis_Type"]; ok {
-			// Chassis_Type 变了也需要重算校验和
-			dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
-			modified = true
+			p := dst[off+3 : end-1]
+			tlvMod := modifyTLV(p, fields, "Chassis_", []string{"PartNumber", "SerialNumber"}, logFn)
+			if tlvMod {
+				dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
+				modified = true
+			} else if _, ok := fields["Chassis_Type"]; ok {
+				// Chassis_Type 变了也需要重算校验和
+				dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
+				modified = true
+			}
 		}
 	}
 
@@ -869,14 +879,19 @@ func applyFRUFields(src []byte, fields map[string]string, logFn func(string)) []
 	if off := int(hdr.BoardOffset8B) * 8; off > 0 && off+6 < len(src) {
 		areaLen := int(src[off+1]) * 8
 		end := off + areaLen
-		if end > len(src) {
-			end = len(src)
+		if areaLen < 8 || end > len(src) {
+			logFn("Board 区域长度异常（数据可能不完整），已跳过")
+			areaLen = 0
 		}
-		p := dst[off+6 : end-1] // TLV starts after version(1)+length(1)+lang(1)+mfgdate(3)
-		m := modifyTLV(p, fields, "Board_", []string{"Manufacturer", "ProductName", "SerialNumber", "PartNumber", "FRUFileID"}, logFn)
-		if m {
-			dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
-			modified = true
+		if areaLen == 0 {
+			// 区域不完整，跳过本区
+		} else {
+			p := dst[off+6 : end-1] // TLV starts after version(1)+length(1)+lang(1)+mfgdate(3)
+			m := modifyTLV(p, fields, "Board_", []string{"Manufacturer", "ProductName", "SerialNumber", "PartNumber", "FRUFileID"}, logFn)
+			if m {
+				dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
+				modified = true
+			}
 		}
 	}
 
@@ -884,14 +899,19 @@ func applyFRUFields(src []byte, fields map[string]string, logFn func(string)) []
 	if off := int(hdr.ProductOffset8B) * 8; off > 0 && off+3 < len(src) {
 		areaLen := int(src[off+1]) * 8
 		end := off + areaLen
-		if end > len(src) {
-			end = len(src)
+		if areaLen < 8 || end > len(src) {
+			logFn("Product 区域长度异常（数据可能不完整），已跳过")
+			areaLen = 0
 		}
-		p := dst[off+3 : end-1]
-		m := modifyTLV(p, fields, "Product_", []string{"Manufacturer", "ProductName", "PartNumber", "Version", "SerialNumber", "AssetTag", "FRUFileID", "Extra_0", "Extra_1"}, logFn)
-		if m {
-			dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
-			modified = true
+		if areaLen == 0 {
+			// 区域不完整，跳过本区
+		} else {
+			p := dst[off+3 : end-1]
+			m := modifyTLV(p, fields, "Product_", []string{"Manufacturer", "ProductName", "PartNumber", "Version", "SerialNumber", "AssetTag", "FRUFileID", "Extra_0", "Extra_1"}, logFn)
+			if m {
+				dst[end-1] = fruChecksum(dst[off:end], areaLen-1)
+				modified = true
+			}
 		}
 	}
 
@@ -934,7 +954,9 @@ func modifyTLV(p []byte, fields map[string]string, prefix string, nameList []str
 				}
 				n := len(b)
 				if n > origLen {
-					n = origLen // 截断到字段长度
+					// FRU 字段长度由区域布局固定，超长只能截断（改长度需要重建整个区域）
+					logFn(fmt.Sprintf("%s 新值 %d 字节超过字段长度 %d，已截断", fieldKey, n, origLen))
+					n = origLen
 				}
 				copy(p[i:], b[:n])
 				modified = true
